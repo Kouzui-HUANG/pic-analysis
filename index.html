@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ToneLab</title>
+  <link rel="stylesheet" href="css/style.css?v=7">
+</head>
+<body>
+
+  <header>
+    <h1 id="app-title">調色研究所</h1>
+    <div class="header-actions">
+      <div class="mode-toggle" id="mode-toggle">
+        <button id="mode-photo" class="mode-btn active">攝影</button>
+        <button id="mode-illustration" class="mode-btn">電繪</button>
+      </div>
+      <button id="lang-btn">EN</button>
+      <button id="upload-btn" class="hidden">上傳新圖</button>
+      <button id="reset-btn">重設參數</button>
+      <button id="download-btn">下載</button>
+    </div>
+  </header>
+
+  <!-- Upload -->
+  <div id="drop-zone">
+    <div id="intro-section" class="intro-section">
+      <h2 id="intro-title" class="intro-title">智慧圖片分析與調整工具</h2>
+      <p id="intro-desc" class="intro-desc">上傳一張圖片，系統會自動分析亮度、對比度、飽和度、色溫等特徵，偵測場景風格（如暗調、黃金時刻、人像等），並根據分析結果給出調整建議。你可以即時微調所有參數，比較原圖與調整後的效果。</p>
+      <div class="intro-features">
+        <div class="intro-feature">
+          <span class="intro-icon">🔍</span>
+          <div>
+            <strong id="intro-f1-title">自動診斷</strong>
+            <p id="intro-f1-desc">分析圖片的亮度、色彩、對比度等 10+ 項指標</p>
+          </div>
+        </div>
+        <div class="intro-feature">
+          <span class="intro-icon">🎨</span>
+          <div>
+            <strong id="intro-f2-title">場景偵測</strong>
+            <p id="intro-f2-desc">辨識 14 種場景風格，自動調整策略避免破壞藝術意圖</p>
+          </div>
+        </div>
+        <div class="intro-feature">
+          <span class="intro-icon">⚙️</span>
+          <div>
+            <strong id="intro-f3-title">完整控制</strong>
+            <p id="intro-f3-desc">32 項可調參數，5 組預設儲存，攝影與電繪雙模式</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p id="drop-text">拖放圖片至此處，或點擊上傳</p>
+    <p id="drop-hint" class="drop-hint">支援 JPG、PNG、WebP</p>
+  </div>
+  <input type="file" id="file-input" accept="image/*">
+
+  <!-- Processing overlay -->
+  <div id="processing-overlay" class="hidden">處理中...</div>
+
+  <!-- Workspace (hidden until image loaded) -->
+  <div class="workspace hidden">
+
+    <!-- Image comparison -->
+    <div class="image-panels">
+      <div class="image-panel">
+        <h2 id="title-original">原圖</h2>
+        <div class="canvas-wrap">
+          <canvas id="original-canvas"></canvas>
+        </div>
+        <div class="histogram-row">
+          <div class="histogram-cell"><canvas id="hist-orig-lum" width="256" height="48"></canvas><span class="hist-label-lum">亮度</span></div>
+          <div class="histogram-cell"><canvas id="hist-orig-r" width="256" height="48"></canvas><span>R</span></div>
+          <div class="histogram-cell"><canvas id="hist-orig-g" width="256" height="48"></canvas><span>G</span></div>
+          <div class="histogram-cell"><canvas id="hist-orig-b" width="256" height="48"></canvas><span>B</span></div>
+        </div>
+      </div>
+      <div class="image-panel">
+        <h2 id="title-adjusted">調整後</h2>
+        <div class="canvas-wrap">
+          <canvas id="adjusted-canvas"></canvas>
+        </div>
+        <div class="histogram-row">
+          <div class="histogram-cell"><canvas id="hist-adj-lum" width="256" height="48"></canvas><span class="hist-label-lum">亮度</span></div>
+          <div class="histogram-cell"><canvas id="hist-adj-r" width="256" height="48"></canvas><span>R</span></div>
+          <div class="histogram-cell"><canvas id="hist-adj-g" width="256" height="48"></canvas><span>G</span></div>
+          <div class="histogram-cell"><canvas id="hist-adj-b" width="256" height="48"></canvas><span>B</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scene Detection -->
+    <div class="section-title" id="title-scenes">偵測到的場景風格</div>
+    <div id="scenes-panel" class="scenes-row"></div>
+
+    <!-- Diagnosis -->
+    <div class="section-title" id="title-diagnosis">診斷結果</div>
+    <div class="diagnosis-panels">
+      <div class="diagnosis-column">
+        <h3 class="diag-column-title" id="diag-title-original">原圖</h3>
+        <div id="diagnosis-panel"></div>
+      </div>
+      <div class="diagnosis-column">
+        <h3 class="diag-column-title" id="diag-title-adjusted">調整後</h3>
+        <div id="diagnosis-panel-adjusted"></div>
+      </div>
+    </div>
+
+    <!-- Active adjustments -->
+    <div class="section-title" id="title-adjustments">啟用的調整項目</div>
+    <div id="adjustments-panel"></div>
+
+    <!-- Presets -->
+    <div class="section-title" id="title-presets">預設組合</div>
+    <div id="presets-panel" class="presets-grid"></div>
+
+    <!-- Parameter controls -->
+    <div class="section-title" id="title-parameters">參數設定</div>
+    <div id="controls-panel" class="controls-grid"></div>
+
+  </div>
+
+  <!-- Scripts: loaded in dependency order -->
+  <script src="js/color.js?v=9"></script>
+  <script src="js/stats.js?v=9"></script>
+  <script src="js/lang.js?v=9"></script>
+  <script src="js/analyzer.js?v=9"></script>
+  <script src="js/scene.js?v=9"></script>
+  <script src="js/strategy.js?v=9"></script>
+  <script src="js/adjuster.js?v=9"></script>
+  <script src="js/main.js?v=9"></script>
+</body>
+</html>

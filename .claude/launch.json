@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pic-analysis",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "3000", "-d", "/Users/kouzuimac/Documents/claude_code/pic-analysis"],
+      "port": 3000
+    }
+  ]
+}
