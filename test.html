@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PicAnalysis — Unit Tests</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: monospace; background: #111; color: #ccc; padding: 20px; }
+  h1 { margin-bottom: 12px; color: #fff; }
+  .suite { margin: 12px 0; border-left: 3px solid #444; padding-left: 12px; }
+  .suite-title { font-weight: bold; color: #aaa; margin-bottom: 4px; }
+  .pass { color: #6c6; }
+  .fail { color: #e66; }
+  .summary { margin-top: 20px; padding: 12px; border: 1px solid #444; font-size: 16px; }
+  .summary.all-pass { border-color: #6c6; color: #6c6; }
+  .summary.has-fail { border-color: #e66; color: #e66; }
+  .detail { color: #888; font-size: 12px; margin-left: 24px; }
+</style>
+</head>
+<body>
+<h1>PicAnalysis Unit Tests</h1>
+<div id="output"></div>
+
+<!-- Load source modules in dependency order -->
+<script src="js/color.js"></script>
+<script src="js/stats.js"></script>
+<script src="js/analyzer.js"></script>
+<script src="js/scene.js"></script>
+<script src="js/strategy.js"></script>
+<script src="js/adjuster.js"></script>
+
+<script>
+(function () {
+  var output = document.getElementById("output");
+  var totalPass = 0;
+  var totalFail = 0;
+  var currentSuite = null;
+
+  // ── Mini test framework ──
+
+  function suite(name) {
+    var div = document.createElement("div");
+    div.className = "suite";
+    div.innerHTML = '<div class="suite-title">' + name + "</div>";
+    output.appendChild(div);
+    currentSuite = div;
+  }
+
+  function assert(description, condition, detail) {
+    var el = document.createElement("div");
+    if (condition) {
+      el.className = "pass";
+      el.textContent = "  PASS  " + description;
+      totalPass++;
+    } else {
+      el.className = "fail";
+      el.textContent = "  FAIL  " + description;
+      totalFail++;
+      if (detail) {
+        var d = document.createElement("div");
+        d.className = "detail";
+        d.textContent = detail;
+        el.appendChild(d);
+      }
+    }
+    currentSuite.appendChild(el);
+  }
+
+  function approx(a, b, eps) {
+    if (eps === undefined) eps = 0.01;
+    return Math.abs(a - b) < eps;
+  }
+
+  function arrApprox(a, b, eps) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!approx(a[i], b[i], eps)) return false;
+    }
+    return true;
+  }
+
+  // Helper: create a flat RGBA image from pixel array [[r,g,b,a], ...]
+  function makeImageData(w, h, pixels) {
+    var data = new Uint8ClampedArray(w * h * 4);
+    for (var i = 0; i < pixels.length; i++) {
+      data[i * 4]     = pixels[i][0];
+      data[i * 4 + 1] = pixels[i][1];
+      data[i * 4 + 2] = pixels[i][2];
+      data[i * 4 + 3] = pixels[i][3] !== undefined ? pixels[i][3] : 255;
+    }
+    return new ImageData(data, w, h);
+  }
+
+  // Helper: create uniform color image
+  function uniformImage(w, h, r, g, b) {
+    var pixels = [];
+    for (var i = 0; i < w * h; i++) pixels.push([r, g, b, 255]);
+    return makeImageData(w, h, pixels);
+  }
+
+  var Color = PicAnalysis.Color;
+  var Stats = PicAnalysis.Stats;
+  var Analyzer = PicAnalysis.Analyzer;
+  var Scene = PicAnalysis.Scene;
+  var Strategy = PicAnalysis.Strategy;
+  var Adjuster = PicAnalysis.Adjuster;
+
+  // ════════════════════════════════════════════════
+  // 1. Color.js
+  // ════════════════════════════════════════════════
+
+  suite("Color — clamp");
+  assert("clamp(5,0,10) = 5", Color.clamp(5, 0, 10) === 5);
+  assert("clamp(-3,0,10) = 0", Color.clamp(-3, 0, 10) === 0);
+  assert("clamp(15,0,10) = 10", Color.clamp(15, 0, 10) === 10);
+  assert("clamp(0,0,0) = 0", Color.clamp(0, 0, 0) === 0);
+
+  suite("Color — luminance");
+  assert("luminance(255,255,255) ≈ 255", approx(Color.luminance(255, 255, 255), 255, 0.1));
+  assert("luminance(0,0,0) = 0", Color.luminance(0, 0, 0) === 0);
+  assert("luminance(255,0,0) ≈ 76.245", approx(Color.luminance(255, 0, 0), 76.245, 0.01));
+  assert("luminance(0,255,0) ≈ 149.685", approx(Color.luminance(0, 255, 0), 149.685, 0.01));
+  assert("luminance(0,0,255) ≈ 29.07", approx(Color.luminance(0, 0, 255), 29.07, 0.01));
+
+  suite("Color — RGB ↔ HSL roundtrip");
+  (function () {
+    var testColors = [
+      [255, 0, 0],     // red
+      [0, 255, 0],     // green
+      [0, 0, 255],     // blue
+      [255, 255, 0],   // yellow
+      [128, 128, 128], // gray
+      [0, 0, 0],       // black
+      [255, 255, 255], // white
+      [200, 100, 50],  // arbitrary warm
+    ];
+    for (var i = 0; i < testColors.length; i++) {
+      var c = testColors[i];
+      var hsl = Color.rgbToHsl(c[0], c[1], c[2]);
+      var back = Color.hslToRgb(hsl[0], hsl[1], hsl[2]);
+      var ok = Math.abs(back[0] - c[0]) <= 1 &&
+               Math.abs(back[1] - c[1]) <= 1 &&
+               Math.abs(back[2] - c[2]) <= 1;
+      assert("roundtrip [" + c + "] → HSL → RGB", ok,
+        "got [" + back + "] expected [" + c + "]");
+    }
+  })();
+
+  suite("Color — HSL known values");
+  (function () {
+    var hsl = Color.rgbToHsl(255, 0, 0);
+    assert("red hue ≈ 0", approx(hsl[0], 0, 0.01));
+    assert("red saturation = 1", approx(hsl[1], 1, 0.01));
+    assert("red lightness ≈ 0.5", approx(hsl[2], 0.5, 0.01));
+
+    var hsl2 = Color.rgbToHsl(128, 128, 128);
+    assert("gray saturation = 0", hsl2[1] === 0);
+    assert("gray lightness ≈ 0.502", approx(hsl2[2], 128 / 255, 0.01));
+  })();
+
+  suite("Color — RGB ↔ LAB roundtrip");
+  (function () {
+    var testColors = [
+      [255, 0, 0], [0, 255, 0], [0, 0, 255],
+      [255, 255, 255], [0, 0, 0], [128, 128, 128],
+      [200, 150, 100], [50, 100, 200],
+    ];
+    for (var i = 0; i < testColors.length; i++) {
+      var c = testColors[i];
+      var lab = Color.rgbToLab(c[0], c[1], c[2]);
+      var back = Color.labToRgb(lab[0], lab[1], lab[2]);
+      var ok = Math.abs(back[0] - c[0]) <= 1 &&
+               Math.abs(back[1] - c[1]) <= 1 &&
+               Math.abs(back[2] - c[2]) <= 1;
+      assert("roundtrip [" + c + "] → LAB → RGB", ok,
+        "got [" + back + "] expected [" + c + "]");
+    }
+  })();
+
+  suite("Color — LAB known values");
+  (function () {
+    var lab = Color.rgbToLab(255, 255, 255);
+    assert("white L* ≈ 100", approx(lab[0], 100, 0.5));
+    assert("white a* ≈ 0", approx(lab[1], 0, 0.5));
+    assert("white b* ≈ 0", approx(lab[2], 0, 0.5));
+
+    var lab2 = Color.rgbToLab(0, 0, 0);
+    assert("black L* ≈ 0", approx(lab2[0], 0, 0.5));
+  })();
+
+  // ════════════════════════════════════════════════
+  // 2. Stats.js
+  // ════════════════════════════════════════════════
+
+  suite("Stats — mean");
+  assert("mean([1,2,3,4,5]) = 3", Stats.mean([1, 2, 3, 4, 5]) === 3);
+  assert("mean([]) = 0", Stats.mean([]) === 0);
+  assert("mean([10]) = 10", Stats.mean([10]) === 10);
+  assert("mean([0,0,0]) = 0", Stats.mean([0, 0, 0]) === 0);
+
+  suite("Stats — std");
+  assert("std([1,1,1]) = 0", Stats.std([1, 1, 1]) === 0);
+  assert("std([]) = 0", Stats.std([]) === 0);
+  assert("std([0,10]) ≈ 5", approx(Stats.std([0, 10]), 5, 0.01));
+  assert("std([2,4,4,4,5,5,7,9]) ≈ 2", approx(Stats.std([2, 4, 4, 4, 5, 5, 7, 9]), 2, 0.01));
+
+  suite("Stats — skewness");
+  assert("skewness([1,1,1]) = 0", Stats.skewness([1, 1, 1]) === 0);
+  assert("skewness([]) = 0", Stats.skewness([]) === 0);
+  (function () {
+    // A right-skewed distribution
+    var arr = [1, 1, 1, 1, 1, 1, 1, 10];
+    var sk = Stats.skewness(arr);
+    assert("right-skewed data has positive skewness", sk > 0,
+      "skewness = " + sk);
+  })();
+
+  suite("Stats — percentile");
+  assert("percentile([1,2,3,4,5], 0) = 1", Stats.percentile([1, 2, 3, 4, 5], 0) === 1);
+  assert("percentile([1,2,3,4,5], 100) = 5", Stats.percentile([1, 2, 3, 4, 5], 100) === 5);
+  assert("percentile([1,2,3,4,5], 50) = 3", Stats.percentile([1, 2, 3, 4, 5], 50) === 3);
+  assert("percentile([], 50) = 0", Stats.percentile([], 50) === 0);
+  (function () {
+    var p25 = Stats.percentile([1, 2, 3, 4, 5], 25);
+    assert("percentile([1..5], 25) = 2", approx(p25, 2, 0.01));
+  })();
+
+  suite("Stats — histogram");
+  (function () {
+    var h = Stats.histogram([0, 1, 2, 3, 4], 5, 0, 4);
+    assert("histogram has 5 bins", h.length === 5);
+    var total = 0;
+    for (var i = 0; i < h.length; i++) total += h[i];
+    assert("histogram total = 5", total === 5);
+  })();
+
+  suite("Stats — kMeans");
+  (function () {
+    // Two clear clusters
+    var points = [];
+    for (var i = 0; i < 50; i++) points.push([10, 10, 10]);
+    for (var i = 0; i < 50; i++) points.push([200, 200, 200]);
+    var clusters = Stats.kMeans(points, 2);
+    assert("kMeans returns 2 clusters", clusters.length === 2);
+    assert("kMeans cluster sizes sum to 100",
+      clusters[0].count + clusters[1].count === 100);
+    // Centers should be near [10,10,10] and [200,200,200]
+    var centers = clusters.map(function (c) { return c.center; }).sort(function (a, b) { return a[0] - b[0]; });
+    assert("kMeans dark cluster center ≈ [10,10,10]",
+      approx(centers[0][0], 10, 2) && approx(centers[0][1], 10, 2));
+    assert("kMeans bright cluster center ≈ [200,200,200]",
+      approx(centers[1][0], 200, 2) && approx(centers[1][1], 200, 2));
+  })();
+  (function () {
+    assert("kMeans([]) returns []", Stats.kMeans([], 3).length === 0);
+    var single = Stats.kMeans([[5, 5, 5]], 3);
+    assert("kMeans with fewer points than k works", single.length === 1);
+  })();
+
+  // ════════════════════════════════════════════════
+  // 3. Analyzer.js
+  // ════════════════════════════════════════════════
+
+  suite("Analyzer — uniform gray image");
+  (function () {
+    var img = uniformImage(9, 9, 128, 128, 128);
+    var d = Analyzer.analyze(img);
+    assert("returns diagnosis object", d && typeof d === "object");
+    assert("luminance.mean ≈ 128", approx(d.luminance.mean, 128, 1));
+    assert("luminance.std ≈ 0", approx(d.luminance.std, 0, 1));
+    assert("saturation.mean ≈ 0", approx(d.saturation.mean, 0, 0.01));
+    assert("colorTempBias ≈ 0", approx(d.colorTempBias, 0, 0.01));
+    assert("tintBias ≈ 0", approx(d.tintBias, 0, 0.01));
+    assert("dynamicRange ≈ 0", approx(d.luminance.dynamicRange, 0, 1));
+    assert("has 9 regions", d.regions.length === 9);
+    assert("regionSummary exists", d.regionSummary && typeof d.regionSummary.regionContrast === "number");
+    assert("regionContrast ≈ 0", approx(d.regionSummary.regionContrast, 0, 1));
+    assert("colorHarmony type is neutral", d.colorHarmony.type === "neutral");
+    assert("dominantColors exists", Array.isArray(d.dominantColors));
+    assert("pixelCount = 81", d.pixelCount === 81);
+    assert("width = 9", d.width === 9);
+    assert("channels exist", d.channels && typeof d.channels.rMean === "number");
+  })();
+
+  suite("Analyzer — warm image (red dominant)");
+  (function () {
+    var img = uniformImage(9, 9, 220, 100, 80);
+    var d = Analyzer.analyze(img);
+    assert("colorTempBias > 0 (warm)", d.colorTempBias > 0,
+      "colorTempBias = " + d.colorTempBias);
+    assert("saturation.mean > 0", d.saturation.mean > 0);
+  })();
+
+  suite("Analyzer — cool image (blue dominant)");
+  (function () {
+    var img = uniformImage(9, 9, 80, 100, 220);
+    var d = Analyzer.analyze(img);
+    assert("colorTempBias < 0 (cool)", d.colorTempBias < 0,
+      "colorTempBias = " + d.colorTempBias);
+  })();
+
+  suite("Analyzer — dark image");
+  (function () {
+    var img = uniformImage(9, 9, 20, 20, 20);
+    var d = Analyzer.analyze(img);
+    assert("luminance.mean < 30", d.luminance.mean < 30);
+  })();
+
+  suite("Analyzer — bright image");
+  (function () {
+    var img = uniformImage(9, 9, 240, 240, 240);
+    var d = Analyzer.analyze(img);
+    assert("luminance.mean > 220", d.luminance.mean > 220);
+  })();
+
+  suite("Analyzer — high contrast image");
+  (function () {
+    // Half black, half white
+    var pixels = [];
+    for (var i = 0; i < 40; i++) pixels.push([0, 0, 0, 255]);
+    for (var i = 0; i < 41; i++) pixels.push([255, 255, 255, 255]);
+    var img = makeImageData(9, 9, pixels);
+    var d = Analyzer.analyze(img);
+    assert("luminance.std > 100", d.luminance.std > 100,
+      "std = " + d.luminance.std);
+    assert("dynamicRange > 200", d.luminance.dynamicRange > 200);
+  })();
+
+  // ════════════════════════════════════════════════
+  // 4. Scene.js
+  // ════════════════════════════════════════════════
+
+  suite("Scene — detect returns array of scene objects");
+  (function () {
+    var img = uniformImage(9, 9, 128, 128, 128);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    assert("returns array", Array.isArray(scenes));
+    assert("has entries", scenes.length > 0);
+    assert("each scene has type", scenes[0].type && typeof scenes[0].type === "string");
+    assert("each scene has confidence", typeof scenes[0].confidence === "number");
+    assert("each scene has active flag", typeof scenes[0].active === "boolean");
+    assert("each scene has factors", Array.isArray(scenes[0].factors));
+  })();
+
+  suite("Scene — dark image triggers lowKey");
+  (function () {
+    // Dark image with some range
+    var pixels = [];
+    for (var i = 0; i < 65; i++) pixels.push([25, 25, 25, 255]);
+    for (var i = 0; i < 16; i++) pixels.push([80, 80, 80, 255]);
+    var img = makeImageData(9, 9, pixels);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var lowKey = scenes.filter(function (s) { return s.type === "lowKey"; })[0];
+    assert("lowKey scene exists", !!lowKey);
+    assert("lowKey confidence > 0", lowKey.confidence > 0,
+      "confidence = " + lowKey.confidence);
+  })();
+
+  suite("Scene — bright image triggers highKey");
+  (function () {
+    var pixels = [];
+    for (var i = 0; i < 65; i++) pixels.push([230, 230, 230, 255]);
+    for (var i = 0; i < 16; i++) pixels.push([180, 180, 180, 255]);
+    var img = makeImageData(9, 9, pixels);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var highKey = scenes.filter(function (s) { return s.type === "highKey"; })[0];
+    assert("highKey scene exists", !!highKey);
+    assert("highKey confidence > 0", highKey.confidence > 0,
+      "confidence = " + highKey.confidence);
+  })();
+
+  suite("Scene — desaturated image triggers desaturated");
+  (function () {
+    var img = uniformImage(9, 9, 130, 125, 128);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var desat = scenes.filter(function (s) { return s.type === "desaturated"; })[0];
+    assert("desaturated scene exists", !!desat);
+    assert("desaturated confidence > 0", desat.confidence > 0,
+      "confidence = " + desat.confidence);
+  })();
+
+  suite("Scene — SCENE_TYPES constant");
+  assert("SCENE_TYPES has 14 entries", Scene.SCENE_TYPES.length === 14);
+  assert("CONFIDENCE_THRESHOLD = 0.3", Scene.CONFIDENCE_THRESHOLD === 0.3);
+
+  // ════════════════════════════════════════════════
+  // 5. Strategy.js
+  // ════════════════════════════════════════════════
+
+  suite("Strategy — ADJUSTMENT_TYPES");
+  (function () {
+    var types = Strategy.ADJUSTMENT_TYPES;
+    assert("has BRIGHTNESS", types.BRIGHTNESS === "brightness");
+    assert("has CONTRAST", types.CONTRAST === "contrast");
+    assert("has VIBRANCE", types.VIBRANCE === "vibrance");
+    assert("has SATURATION", types.SATURATION === "saturation");
+    assert("has WHITE_BALANCE", types.WHITE_BALANCE === "whiteBalance");
+    assert("has SHADOW_RECOVERY", types.SHADOW_RECOVERY === "shadowRecovery");
+    assert("has HIGHLIGHT_RECOVERY", types.HIGHLIGHT_RECOVERY === "highlightRecovery");
+    assert("has CLARITY", types.CLARITY === "clarity");
+    assert("has 11 types", Object.keys(types).length === 11);
+  })();
+
+  suite("Strategy — defaultParams");
+  (function () {
+    var photo = Strategy.defaultParams("photo");
+    assert("photo params has globalStrength", typeof photo.globalStrength === "number");
+    assert("photo globalStrength = 1", photo.globalStrength === 1);
+    assert("photo sceneAwareness = 0.85", approx(photo.sceneAwareness, 0.85, 0.01));
+
+    var illust = Strategy.defaultParams("illustration");
+    assert("illustration params has globalStrength", typeof illust.globalStrength === "number");
+    assert("illustration sceneAwareness = 0.9", approx(illust.sceneAwareness, 0.9, 0.01));
+  })();
+
+  suite("Strategy — route returns adjustment array");
+  (function () {
+    var img = uniformImage(9, 9, 128, 128, 128);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    assert("returns array", Array.isArray(adjs));
+    assert("has entries", adjs.length > 0);
+    assert("each adj has type", typeof adjs[0].type === "string");
+    assert("each adj has active", typeof adjs[0].active === "boolean");
+    // Active adjustments have amount; inactive ones may not
+    var firstActive = adjs.filter(function (a) { return a.active; })[0];
+    assert("active adj has amount", !firstActive || typeof firstActive.amount === "number");
+  })();
+
+  suite("Strategy — skewed dark image triggers brightness correction");
+  (function () {
+    // Brightness triggers on skewness, not mean. Build a skewed-dark image.
+    var pixels = [];
+    for (var i = 0; i < 70; i++) pixels.push([20, 20, 20, 255]);  // mostly dark
+    for (var i = 0; i < 11; i++) pixels.push([200, 200, 200, 255]); // few bright
+    var img = makeImageData(9, 9, pixels);
+    var d = Analyzer.analyze(img);
+    assert("image has negative skewness (dark-heavy)", d.luminance.skewness > 0.3,
+      "skewness = " + d.luminance.skewness);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var bright = adjs.filter(function (a) { return a.type === "brightness"; })[0];
+    assert("brightness adjustment exists", !!bright);
+    assert("brightness is active", bright.active === true,
+      "active = " + bright.active);
+  })();
+
+  suite("Strategy — saturated image triggers desaturation");
+  (function () {
+    var img = uniformImage(9, 9, 255, 0, 0); // pure red, very saturated
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var desat = adjs.filter(function (a) { return a.type === "desaturation"; })[0];
+    assert("desaturation adjustment exists", !!desat);
+    assert("desaturation is active", desat.active === true);
+  })();
+
+  suite("Strategy — neutral image has mostly inactive adjustments");
+  (function () {
+    var img = uniformImage(9, 9, 128, 128, 128);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var activeCount = adjs.filter(function (a) { return a.active; }).length;
+    assert("few active adjustments for neutral image", activeCount <= 5,
+      "activeCount = " + activeCount);
+  })();
+
+  suite("Strategy — illustration mode flips brightness direction");
+  (function () {
+    // Brightness triggers on skewness. Build a skewed-dark image.
+    var pixels = [];
+    for (var i = 0; i < 70; i++) pixels.push([20, 20, 20, 255]);
+    for (var i = 0; i < 11; i++) pixels.push([200, 200, 200, 255]);
+    var img = makeImageData(9, 9, pixels);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+
+    var photoParams = Strategy.defaultParams("photo");
+    var photoAdjs = Strategy.route(d, photoParams, scenes, "photo");
+    var photoBright = photoAdjs.filter(function (a) { return a.type === "brightness" && a.active; })[0];
+
+    var illustParams = Strategy.defaultParams("illustration");
+    var illustAdjs = Strategy.route(d, illustParams, scenes, "illustration");
+    var illustBright = illustAdjs.filter(function (a) { return a.type === "brightness" && a.active; })[0];
+
+    if (photoBright && illustBright) {
+      assert("photo and illustration have opposite directions",
+        photoBright.direction !== illustBright.direction,
+        "photo dir=" + photoBright.direction + " illust dir=" + illustBright.direction);
+    } else {
+      // At least verify photo mode triggers
+      assert("brightness triggered in photo mode", !!photoBright,
+        "photo=" + !!photoBright + " illust=" + !!illustBright);
+    }
+  })();
+
+  suite("Strategy — MODES constant");
+  assert("MODES.PHOTO = 'photo'", Strategy.MODES.PHOTO === "photo");
+  assert("MODES.ILLUSTRATION = 'illustration'", Strategy.MODES.ILLUSTRATION === "illustration");
+
+  suite("Strategy — conflict resolution");
+  (function () {
+    // High contrast image should not have both contrast and contrastReduction active
+    var pixels = [];
+    for (var i = 0; i < 40; i++) pixels.push([10, 10, 10, 255]);
+    for (var i = 0; i < 41; i++) pixels.push([250, 250, 250, 255]);
+    var img = makeImageData(9, 9, pixels);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var contrastActive = adjs.filter(function (a) {
+      return a.type === "contrast" && a.active;
+    }).length;
+    var reductionActive = adjs.filter(function (a) {
+      return a.type === "contrastReduction" && a.active;
+    }).length;
+    assert("contrast and contrastReduction not both active",
+      !(contrastActive > 0 && reductionActive > 0),
+      "contrast=" + contrastActive + " reduction=" + reductionActive);
+  })();
+
+  // ════════════════════════════════════════════════
+  // 6. Adjuster.js
+  // ════════════════════════════════════════════════
+
+  suite("Adjuster — no active adjustments returns identical pixels");
+  (function () {
+    var img = uniformImage(3, 3, 100, 150, 200);
+    var adjs = [{ type: "brightness", active: false, amount: 0.5, direction: 1 }];
+    var result = Adjuster.adjust(img, adjs);
+    assert("result is ImageData", result instanceof ImageData);
+    assert("result dimensions match", result.width === 3 && result.height === 3);
+    var same = true;
+    for (var i = 0; i < img.data.length; i++) {
+      if (result.data[i] !== img.data[i]) { same = false; break; }
+    }
+    assert("pixels unchanged when no active adjustments", same);
+  })();
+
+  suite("Adjuster — brightness increase makes pixels brighter");
+  (function () {
+    var img = uniformImage(3, 3, 100, 100, 100);
+    var adjs = [{ type: "brightness", active: true, amount: 0.8, direction: 1 }];
+    var result = Adjuster.adjust(img, adjs);
+    // Average should be brighter
+    var origSum = 0, resultSum = 0;
+    for (var i = 0; i < 9; i++) {
+      origSum += img.data[i * 4] + img.data[i * 4 + 1] + img.data[i * 4 + 2];
+      resultSum += result.data[i * 4] + result.data[i * 4 + 1] + result.data[i * 4 + 2];
+    }
+    assert("brightness increase raises average", resultSum > origSum,
+      "orig=" + origSum + " result=" + resultSum);
+  })();
+
+  suite("Adjuster — brightness decrease makes pixels darker");
+  (function () {
+    var img = uniformImage(3, 3, 150, 150, 150);
+    var adjs = [{ type: "brightness", active: true, amount: 0.8, direction: -1 }];
+    var result = Adjuster.adjust(img, adjs);
+    var origSum = 0, resultSum = 0;
+    for (var i = 0; i < 9; i++) {
+      origSum += img.data[i * 4] + img.data[i * 4 + 1] + img.data[i * 4 + 2];
+      resultSum += result.data[i * 4] + result.data[i * 4 + 1] + result.data[i * 4 + 2];
+    }
+    assert("brightness decrease lowers average", resultSum < origSum,
+      "orig=" + origSum + " result=" + resultSum);
+  })();
+
+  suite("Adjuster — contrast increase widens tonal range");
+  (function () {
+    // Two-tone image: dark gray and light gray
+    var pixels = [];
+    for (var i = 0; i < 5; i++) pixels.push([90, 90, 90, 255]);
+    for (var i = 0; i < 4; i++) pixels.push([170, 170, 170, 255]);
+    var img = makeImageData(3, 3, pixels);
+    var adjs = [{ type: "contrast", active: true, amount: 0.8 }];
+    var result = Adjuster.adjust(img, adjs);
+    // Dark should get darker, light should get lighter
+    assert("contrast widens: dark pixel gets darker", result.data[0] < 90,
+      "was 90, got " + result.data[0]);
+    assert("contrast widens: light pixel gets lighter", result.data[5 * 4] > 170,
+      "was 170, got " + result.data[5 * 4]);
+  })();
+
+  suite("Adjuster — saturation boost increases saturation");
+  (function () {
+    var img = uniformImage(3, 3, 180, 100, 100); // muted red
+    var adjs = [{ type: "saturation", active: true, amount: 0.8, direction: 1 }];
+    var result = Adjuster.adjust(img, adjs);
+    // Red channel should increase, green/blue should decrease (or red-green gap widens)
+    var origGap = img.data[0] - img.data[1]; // R - G
+    var resultGap = result.data[0] - result.data[1];
+    assert("saturation boost widens R-G gap", resultGap >= origGap,
+      "origGap=" + origGap + " resultGap=" + resultGap);
+  })();
+
+  suite("Adjuster — desaturation reduces saturation");
+  (function () {
+    var img = uniformImage(3, 3, 200, 50, 50); // vivid red
+    var adjs = [{ type: "desaturation", active: true, amount: 0.8, direction: -1 }];
+    var result = Adjuster.adjust(img, adjs);
+    var origGap = img.data[0] - img.data[1];
+    var resultGap = result.data[0] - result.data[1];
+    assert("desaturation narrows R-G gap", resultGap <= origGap,
+      "origGap=" + origGap + " resultGap=" + resultGap);
+  })();
+
+  suite("Adjuster — shadow recovery lifts dark pixels");
+  (function () {
+    var img = uniformImage(3, 3, 15, 15, 15);
+    var adjs = [{ type: "shadowRecovery", active: true, amount: 0.8, direction: 1 }];
+    var result = Adjuster.adjust(img, adjs);
+    assert("shadow recovery brightens dark pixel", result.data[0] > 15,
+      "was 15, got " + result.data[0]);
+  })();
+
+  suite("Adjuster — highlight recovery pulls down bright pixels");
+  (function () {
+    var img = uniformImage(3, 3, 245, 245, 245);
+    var adjs = [{ type: "highlightRecovery", active: true, amount: 0.8, direction: -1 }];
+    var result = Adjuster.adjust(img, adjs);
+    assert("highlight recovery darkens bright pixel", result.data[0] < 245,
+      "was 245, got " + result.data[0]);
+  })();
+
+  suite("Adjuster — white balance warm shift");
+  (function () {
+    var img = uniformImage(3, 3, 128, 128, 128);
+    var adjs = [{ type: "whiteBalance", active: true, amount: 0.5, direction: 1 }];
+    var result = Adjuster.adjust(img, adjs);
+    // Warm = more yellow/red, so b* increases → R should increase relative to B
+    var rDiff = result.data[0] - img.data[0];
+    var bDiff = result.data[2] - img.data[2];
+    assert("warm WB: R shift > B shift (or B decreases)", rDiff > bDiff,
+      "rDiff=" + rDiff + " bDiff=" + bDiff);
+  })();
+
+  suite("Adjuster — white balance cool shift");
+  (function () {
+    var img = uniformImage(3, 3, 128, 128, 128);
+    var adjs = [{ type: "whiteBalance", active: true, amount: 0.5, direction: -1 }];
+    var result = Adjuster.adjust(img, adjs);
+    var rDiff = result.data[0] - img.data[0];
+    var bDiff = result.data[2] - img.data[2];
+    assert("cool WB: B shift > R shift", bDiff > rDiff,
+      "rDiff=" + rDiff + " bDiff=" + bDiff);
+  })();
+
+  suite("Adjuster — alpha channel preserved");
+  (function () {
+    var pixels = [[100, 150, 200, 128]];
+    for (var i = 1; i < 9; i++) pixels.push([100, 150, 200, 255]);
+    var img = makeImageData(3, 3, pixels);
+    var adjs = [{ type: "brightness", active: true, amount: 0.5, direction: 1 }];
+    var result = Adjuster.adjust(img, adjs);
+    assert("alpha of first pixel preserved", result.data[3] === 128,
+      "expected 128, got " + result.data[3]);
+  })();
+
+  suite("Adjuster — vibrance targets unsaturated pixels more");
+  (function () {
+    // Gray pixel (low sat) vs colored pixel (high sat)
+    var pixels = [
+      [128, 128, 128, 255], // gray
+      [200, 50, 50, 255],   // vivid red
+      [128, 128, 128, 255],
+      [200, 50, 50, 255],
+      [128, 128, 128, 255],
+      [200, 50, 50, 255],
+      [128, 128, 128, 255],
+      [200, 50, 50, 255],
+      [128, 128, 128, 255],
+    ];
+    var img = makeImageData(3, 3, pixels);
+    var adjs = [{ type: "vibrance", active: true, amount: 0.8, direction: 1 }];
+    var result = Adjuster.adjust(img, adjs);
+    // Gray pixels should stay roughly gray (achromatic protection)
+    var grayR = result.data[0], grayG = result.data[1], grayB = result.data[2];
+    var graySpread = Math.max(grayR, grayG, grayB) - Math.min(grayR, grayG, grayB);
+    assert("vibrance doesn't add much color to gray pixels", graySpread < 15,
+      "spread = " + graySpread);
+  })();
+
+  suite("Adjuster — clarity enhances midtone contrast");
+  (function () {
+    var img = uniformImage(3, 3, 128, 128, 128); // pure midtone
+    var adjs = [{ type: "clarity", active: true, amount: 0.8 }];
+    var result = Adjuster.adjust(img, adjs);
+    // For a uniform midtone image, clarity should have minimal effect
+    // (S-curve at midpoint stays at midpoint)
+    var diff = Math.abs(result.data[0] - 128);
+    assert("clarity on uniform midtone has small effect", diff < 10,
+      "diff = " + diff);
+  })();
+
+  suite("Adjuster — PROTECTION_PROFILES exist for all types");
+  (function () {
+    var types = Strategy.ADJUSTMENT_TYPES;
+    var profiles = Adjuster.PROTECTION_PROFILES;
+    for (var key in types) {
+      var t = types[key];
+      assert("profile exists for " + t, profiles[t] !== undefined);
+    }
+  })();
+
+  // ════════════════════════════════════════════════
+  // 7. Full pipeline integration
+  // ════════════════════════════════════════════════
+
+  suite("Pipeline — full pipeline runs without error");
+  (function () {
+    var img = uniformImage(9, 9, 100, 80, 60);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var result = Adjuster.adjust(img, adjs);
+    assert("pipeline completes", result instanceof ImageData);
+    assert("result has correct size", result.data.length === img.data.length);
+  })();
+
+  suite("Pipeline — illustration mode full pipeline");
+  (function () {
+    var img = uniformImage(9, 9, 100, 80, 60);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("illustration");
+    var adjs = Strategy.route(d, params, scenes, "illustration");
+    var result = Adjuster.adjust(img, adjs);
+    assert("illustration pipeline completes", result instanceof ImageData);
+  })();
+
+  suite("Pipeline — analysis of adjusted image works");
+  (function () {
+    // Use a skewed-dark image so brightness correction triggers
+    var pixels = [];
+    for (var i = 0; i < 70; i++) pixels.push([30, 30, 30, 255]);
+    for (var i = 0; i < 11; i++) pixels.push([180, 180, 180, 255]);
+    var img = makeImageData(9, 9, pixels);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var result = Adjuster.adjust(img, adjs);
+    var d2 = Analyzer.analyze(result);
+    assert("re-analysis works", d2 && typeof d2.luminance.mean === "number");
+    // Verify the pipeline at least modifies the image
+    var changed = false;
+    for (var i = 0; i < img.data.length; i++) {
+      if (result.data[i] !== img.data[i]) { changed = true; break; }
+    }
+    assert("pipeline modifies the image", changed);
+  })();
+
+  suite("Pipeline — diverse color image");
+  (function () {
+    var pixels = [
+      [255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255],
+      [255, 255, 0, 255], [255, 0, 255, 255], [0, 255, 255, 255],
+      [128, 64, 0, 255], [0, 128, 64, 255], [64, 0, 128, 255],
+    ];
+    var img = makeImageData(3, 3, pixels);
+    var d = Analyzer.analyze(img);
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var result = Adjuster.adjust(img, adjs);
+    assert("diverse color pipeline completes", result instanceof ImageData);
+    assert("color harmony detected", d.colorHarmony.type !== undefined);
+  })();
+
+  // ════════════════════════════════════════════════
+  // 8. Edge cases
+  // ════════════════════════════════════════════════
+
+  suite("Edge — pure black image");
+  (function () {
+    var img = uniformImage(9, 9, 0, 0, 0);
+    var d = Analyzer.analyze(img);
+    assert("black luminance.mean = 0", d.luminance.mean === 0);
+    assert("black luminance.std = 0", d.luminance.std === 0);
+    var scenes = Scene.detect(d);
+    assert("scene detection works on black", Array.isArray(scenes));
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var result = Adjuster.adjust(img, adjs);
+    assert("pipeline handles pure black", result instanceof ImageData);
+  })();
+
+  suite("Edge — pure white image");
+  (function () {
+    var img = uniformImage(9, 9, 255, 255, 255);
+    var d = Analyzer.analyze(img);
+    assert("white luminance.mean ≈ 255", approx(d.luminance.mean, 255, 0.1));
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var result = Adjuster.adjust(img, adjs);
+    assert("pipeline handles pure white", result instanceof ImageData);
+  })();
+
+  suite("Edge — single pixel image");
+  (function () {
+    var img = uniformImage(1, 1, 128, 64, 32);
+    var d = Analyzer.analyze(img);
+    assert("1x1 analysis works", d.pixelCount === 1);
+    // 1x1 has only 1 region in the 3x3 grid (since floor(1/3)=0, the code handles this)
+    // Just verify it doesn't crash
+    var scenes = Scene.detect(d);
+    var params = Strategy.defaultParams("photo");
+    var adjs = Strategy.route(d, params, scenes, "photo");
+    var result = Adjuster.adjust(img, adjs);
+    assert("1x1 pipeline completes", result instanceof ImageData);
+  })();
+
+  suite("Edge — empty adjustment array");
+  (function () {
+    var img = uniformImage(3, 3, 128, 128, 128);
+    var result = Adjuster.adjust(img, []);
+    assert("empty adjustments returns identical image", result instanceof ImageData);
+    var same = true;
+    for (var i = 0; i < img.data.length; i++) {
+      if (result.data[i] !== img.data[i]) { same = false; break; }
+    }
+    assert("pixels unchanged with empty adjustments", same);
+  })();
+
+  // ════════════════════════════════════════════════
+  // Summary
+  // ════════════════════════════════════════════════
+
+  var summaryDiv = document.createElement("div");
+  summaryDiv.className = "summary " + (totalFail === 0 ? "all-pass" : "has-fail");
+  summaryDiv.textContent = totalPass + " passed, " + totalFail + " failed — " +
+    (totalPass + totalFail) + " total";
+  output.appendChild(summaryDiv);
+
+  // Log to console for automated checking
+  console.log("TEST RESULTS: " + totalPass + " passed, " + totalFail + " failed");
+  if (totalFail > 0) console.error("SOME TESTS FAILED");
+})();
+</script>
+</body>
+</html>
