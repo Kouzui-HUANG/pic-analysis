@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "pic-analysis",
-      "runtimeExecutable": "python3",
+      "runtimeExecutable": "/usr/local/bin/python3",
       "runtimeArgs": ["-m", "http.server", "3000", "-d", "/Users/kouzuimac/Documents/claude_code/pic-analysis"],
       "port": 3000
     }

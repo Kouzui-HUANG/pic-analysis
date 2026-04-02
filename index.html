@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ToneLab</title>
-  <link rel="stylesheet" href="css/style.css?v=8">
+  <link rel="stylesheet" href="css/style.css?v=11">
 </head>
 <body>
 
@@ -16,45 +16,51 @@
         <button id="mode-illustration" class="mode-btn">電繪</button>
       </div>
       <button id="lang-btn">EN</button>
+      <button id="back-btn" class="hidden">返回</button>
       <button id="upload-btn" class="hidden">上傳新圖</button>
       <button id="reset-btn">重設參數</button>
       <button id="download-btn">下載</button>
     </div>
   </header>
 
-  <!-- Upload -->
-  <div id="drop-zone">
-    <div id="intro-section" class="intro-section">
-      <h2 id="intro-title" class="intro-title">智慧圖片分析與調整工具</h2>
-      <p id="intro-desc" class="intro-desc">上傳一張圖片，系統會自動分析亮度、對比度、飽和度、色溫等特徵，偵測場景風格（如暗調、黃金時刻、人像等），並根據分析結果給出調整建議。你可以即時微調所有參數，比較原圖與調整後的效果。</p>
-      <div class="intro-features">
-        <div class="intro-feature">
-          <span class="intro-icon">🔍</span>
-          <div>
-            <strong id="intro-f1-title">自動診斷</strong>
-            <p id="intro-f1-desc">分析圖片的亮度、色彩、對比度等 10+ 項指標</p>
-          </div>
-        </div>
-        <div class="intro-feature">
-          <span class="intro-icon">🎨</span>
-          <div>
-            <strong id="intro-f2-title">場景偵測</strong>
-            <p id="intro-f2-desc">辨識 14 種場景風格，自動調整策略避免破壞藝術意圖</p>
-          </div>
-        </div>
-        <div class="intro-feature">
-          <span class="intro-icon">⚙️</span>
-          <div>
-            <strong id="intro-f3-title">完整控制</strong>
-            <p id="intro-f3-desc">32 項可調參數，5 組預設儲存，攝影與電繪雙模式</p>
-          </div>
-        </div>
+  <!-- Dual-entry landing -->
+  <div id="landing" class="landing">
+    <div id="drop-zone" class="drop-zone-card" data-mode="tonelab">
+      <div class="drop-card-header">
+        <span class="drop-card-icon">🔬</span>
+        <h2 id="landing-tone-title" class="drop-card-title">智慧調色分析</h2>
+      </div>
+      <p id="landing-tone-desc" class="drop-card-desc">自動分析亮度、色溫、飽和度等特徵，偵測場景風格並給出調整建議</p>
+      <div class="drop-card-features">
+        <span id="landing-tone-f1">10+ 項診斷指標</span>
+        <span id="landing-tone-f2">14 種場景偵測</span>
+        <span id="landing-tone-f3">32 項可調參數</span>
+      </div>
+      <div class="drop-card-action">
+        <p id="drop-text">拖放圖片至此處，或點擊上傳</p>
+        <p id="drop-hint" class="drop-hint">支援 JPG、PNG、WebP</p>
       </div>
     </div>
-    <p id="drop-text">拖放圖片至此處，或點擊上傳</p>
-    <p id="drop-hint" class="drop-hint">支援 JPG、PNG、WebP</p>
+
+    <div id="drop-zone-recolor" class="drop-zone-card" data-mode="recolor">
+      <div class="drop-card-header">
+        <span class="drop-card-icon">🎨</span>
+        <h2 id="landing-recolor-title" class="drop-card-title">自動重新配色</h2>
+      </div>
+      <p id="landing-recolor-desc" class="drop-card-desc">針對圖片中的局部色彩進行智慧重新配色，自動產生多種經典配色方案</p>
+      <div class="drop-card-features">
+        <span id="landing-recolor-f1">8 種配色方案</span>
+        <span id="landing-recolor-f2">局部精準調色</span>
+        <span id="landing-recolor-f3">即時預覽切換</span>
+      </div>
+      <div class="drop-card-action">
+        <p id="drop-text-recolor">拖放圖片至此處，或點擊上傳</p>
+        <p class="drop-hint" id="drop-hint-recolor">支援 JPG、PNG、WebP</p>
+      </div>
+    </div>
   </div>
   <input type="file" id="file-input" accept="image/*">
+  <input type="file" id="file-input-recolor" accept="image/*">
 
   <!-- Processing overlay -->
   <div id="processing-overlay" class="hidden">處理中...</div>
@@ -121,14 +127,116 @@
 
   </div>
 
+  <!-- Recolor Workspace (hidden until recolor image loaded) -->
+  <div class="recolor-workspace hidden">
+    <div class="image-panels">
+      <div class="image-panel">
+        <h2 id="recolor-title-original">原圖</h2>
+        <div class="canvas-wrap">
+          <canvas id="recolor-original-canvas"></canvas>
+        </div>
+      </div>
+      <div class="image-panel recolor-result-panel">
+        <div class="recolor-result-header">
+          <button id="recolor-prev" class="recolor-nav-btn">&larr;</button>
+          <h2 id="recolor-scheme-name">配色方案</h2>
+          <span id="recolor-scheme-counter" class="recolor-counter">1 / 8</span>
+          <button id="recolor-next" class="recolor-nav-btn">&rarr;</button>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="recolor-adjusted-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recolor Controls -->
+    <div class="section-title" id="recolor-title-controls">配色控制</div>
+    <div class="recolor-controls-panel" id="recolor-controls-panel">
+      <div class="recolor-control-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="recolor-strength-label">效果強度</label>
+          <span class="recolor-control-value" id="recolor-strength-value">60%</span>
+        </div>
+        <input type="range" id="recolor-strength-slider" class="recolor-slider" min="0" max="100" value="60" step="1">
+      </div>
+      <div class="recolor-control-group recolor-skin-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="recolor-skin-label">膚色保護</label>
+          <span class="recolor-control-value" id="recolor-skin-value">0%</span>
+        </div>
+        <input type="range" id="recolor-skin-slider" class="recolor-slider recolor-skin-range" min="0" max="100" value="0" step="1">
+      </div>
+      <div class="recolor-control-group recolor-vibrance-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="recolor-vibrance-label">智慧飽和度</label>
+          <span class="recolor-control-value" id="recolor-vibrance-value">0</span>
+        </div>
+        <input type="range" id="recolor-vibrance-slider" class="recolor-slider recolor-vibrance-range" min="-100" max="100" value="0" step="1">
+      </div>
+      <div class="recolor-control-group recolor-hue-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="recolor-hue-label">基準色相</label>
+          <div class="recolor-hue-actions">
+            <span class="recolor-control-value" id="recolor-hue-value">自動</span>
+            <button id="recolor-hue-auto-btn" class="recolor-auto-btn active" type="button">Auto</button>
+          </div>
+        </div>
+        <div class="recolor-hue-slider-wrap">
+          <input type="range" id="recolor-hue-slider" class="recolor-slider recolor-hue-range" min="0" max="360" value="0" step="1">
+          <div class="recolor-hue-indicator" id="recolor-hue-indicator"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Palette comparison -->
+    <div class="section-title" id="recolor-title-palette">配色對照</div>
+    <div class="recolor-palette-comparison">
+      <div class="recolor-palette-group">
+        <span class="diag-label" id="recolor-palette-orig-label">原始色盤</span>
+        <div id="recolor-palette-original" class="color-swatches"></div>
+      </div>
+      <div class="recolor-palette-arrow">→</div>
+      <div class="recolor-palette-group">
+        <span class="diag-label" id="recolor-palette-new-label">新色盤</span>
+        <div id="recolor-palette-new" class="color-swatches"></div>
+      </div>
+    </div>
+
+    <!-- Scheme selector dots -->
+    <div class="section-title" id="recolor-title-schemes">所有配色方案</div>
+    <div id="recolor-schemes-panel" class="recolor-schemes-row"></div>
+
+    <!-- Scene Detection (from original image) -->
+    <div class="section-title" id="recolor-title-scenes">偵測到的場景風格</div>
+    <div id="recolor-scenes-panel" class="scenes-row"></div>
+
+    <!-- Diagnosis (original vs auto-corrected) -->
+    <div class="section-title" id="recolor-title-diagnosis">診斷結果</div>
+    <div class="diagnosis-panels">
+      <div class="diagnosis-column">
+        <h3 class="diag-column-title" id="recolor-diag-title-original">原圖</h3>
+        <div id="recolor-diagnosis-panel"></div>
+      </div>
+      <div class="diagnosis-column">
+        <h3 class="diag-column-title" id="recolor-diag-title-adjusted">校正後</h3>
+        <div id="recolor-diagnosis-panel-adjusted"></div>
+      </div>
+    </div>
+
+    <!-- Active auto-correction adjustments -->
+    <div class="section-title" id="recolor-title-adjustments">自動校正項目</div>
+    <div id="recolor-adjustments-panel"></div>
+  </div>
+
   <!-- Scripts: loaded in dependency order -->
-  <script src="js/color.js?v=9"></script>
-  <script src="js/stats.js?v=9"></script>
-  <script src="js/lang.js?v=9"></script>
-  <script src="js/analyzer.js?v=9"></script>
-  <script src="js/scene.js?v=9"></script>
-  <script src="js/strategy.js?v=9"></script>
-  <script src="js/adjuster.js?v=9"></script>
-  <script src="js/main.js?v=9"></script>
+  <script src="js/color.js?v=11"></script>
+  <script src="js/stats.js?v=11"></script>
+  <script src="js/lang.js?v=11"></script>
+  <script src="js/analyzer.js?v=11"></script>
+  <script src="js/scene.js?v=11"></script>
+  <script src="js/strategy.js?v=11"></script>
+  <script src="js/adjuster.js?v=11"></script>
+  <script src="js/recolor.js?v=11"></script>
+  <script src="js/main.js?v=11"></script>
 </body>
 </html>
