@@ -63,10 +63,34 @@ PicAnalysis.Stats = (function () {
       });
     }
 
-    var step = Math.floor(points.length / k);
+    // k-means++ initialisation: pick centroids spread across the data
     var centroids = [];
-    for (var i = 0; i < k; i++) {
-      centroids.push([points[i * step][0], points[i * step][1], points[i * step][2]]);
+    var firstIdx = Math.floor(Math.random() * points.length);
+    centroids.push([points[firstIdx][0], points[firstIdx][1], points[firstIdx][2]]);
+
+    for (var ci = 1; ci < k; ci++) {
+      var dists = new Float64Array(points.length);
+      var totalDist = 0;
+      for (var pi = 0; pi < points.length; pi++) {
+        var minDist = Infinity;
+        for (var cc = 0; cc < centroids.length; cc++) {
+          var d0 = points[pi][0] - centroids[cc][0];
+          var d1 = points[pi][1] - centroids[cc][1];
+          var d2 = points[pi][2] - centroids[cc][2];
+          var dist = d0 * d0 + d1 * d1 + d2 * d2;
+          if (dist < minDist) minDist = dist;
+        }
+        dists[pi] = minDist;
+        totalDist += minDist;
+      }
+      var threshold = Math.random() * totalDist;
+      var cumulative = 0;
+      var picked = points.length - 1;
+      for (var pi = 0; pi < points.length; pi++) {
+        cumulative += dists[pi];
+        if (cumulative >= threshold) { picked = pi; break; }
+      }
+      centroids.push([points[picked][0], points[picked][1], points[picked][2]]);
     }
 
     var assignments = new Int32Array(points.length);

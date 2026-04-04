@@ -114,6 +114,21 @@ PicAnalysis.Color = (function () {
     return [linearToGamma(lr), linearToGamma(lg), linearToGamma(lb)];
   }
 
+  // --- RGB <-> LCH (LAB polar coordinates) ---
+
+  function rgbToLch(r, g, b) {
+    var lab = rgbToLab(r, g, b);
+    var C = Math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+    var h = Math.atan2(lab[2], lab[1]);
+    if (h < 0) h += 2 * Math.PI;
+    return [lab[0], C, h / (2 * Math.PI)]; // h normalised to 0-1
+  }
+
+  function lchToRgb(L, C, h) {
+    var hRad = h * 2 * Math.PI;
+    return labToRgb(L, C * Math.cos(hRad), C * Math.sin(hRad));
+  }
+
   return {
     clamp: clamp,
     luminance: luminance,
@@ -121,5 +136,7 @@ PicAnalysis.Color = (function () {
     hslToRgb: hslToRgb,
     rgbToLab: rgbToLab,
     labToRgb: labToRgb,
+    rgbToLch: rgbToLch,
+    lchToRgb: lchToRgb,
   };
 })();

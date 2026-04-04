@@ -148,6 +148,390 @@ header h1 {
   background: rgba(255, 255, 255, 0.03);
 }
 
+/* --- API Key Button (header) --- */
+
+.api-key-btn {
+  padding: 6px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: "Inter", sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  letter-spacing: 0.3px;
+  margin-right: 10px;
+}
+
+.api-key-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.api-key-btn.has-key {
+  border-color: var(--green-text);
+  color: var(--green-text);
+  background: var(--green-soft);
+}
+
+/* --- API Key Modal --- */
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  animation: modalFadeIn 0.15s ease-out;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  width: 400px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+  animation: modalSlideIn 0.2s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from { transform: translateY(-12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 18px;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-input-group {
+  display: flex;
+  align-items: center;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.modal-input-group:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.modal-input {
+  flex: 1;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 12px;
+  outline: none;
+  letter-spacing: 0.5px;
+}
+
+.modal-input::placeholder {
+  color: var(--text-dim);
+  font-family: "Inter", sans-serif;
+  letter-spacing: 0.3px;
+}
+
+.modal-input-toggle {
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  transition: color var(--transition-fast);
+  line-height: 1;
+}
+
+.modal-input-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.modal-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.modal-checkbox-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.modal-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  font-size: 11px;
+}
+
+.modal-path-label {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.modal-path-value {
+  color: var(--text-secondary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 10px;
+}
+
+.modal-path-btn {
+  padding: 3px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.modal-path-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.modal-load-btn {
+  padding: 8px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: center;
+}
+
+.modal-load-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.modal-btn {
+  padding: 8px 20px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: 1px solid transparent;
+}
+
+.modal-btn-secondary {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+.modal-btn-secondary:hover {
+  border-color: var(--text-dim);
+  color: var(--text-primary);
+}
+
+.modal-btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.modal-btn-primary:hover {
+  background: var(--active);
+  border-color: var(--active);
+}
+
+/* --- AI Recolor Button --- */
+
+.ai-recolor-btn {
+  width: 42px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(124, 124, 255, 0.15) 0%, rgba(180, 120, 255, 0.15) 100%);
+  border: 1px solid rgba(124, 124, 255, 0.25);
+  color: var(--active);
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+  padding: 0;
+  letter-spacing: 1px;
+  margin-left: auto;
+}
+
+.ai-recolor-btn:hover {
+  background: linear-gradient(135deg, rgba(124, 124, 255, 0.25) 0%, rgba(180, 120, 255, 0.25) 100%);
+  border-color: rgba(124, 124, 255, 0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 0 16px rgba(124, 124, 255, 0.15);
+}
+
+.ai-recolor-btn:active {
+  transform: translateY(0);
+}
+
+.ai-recolor-btn.loading {
+  pointer-events: none;
+  opacity: 0.6;
+  animation: ai-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes ai-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* --- AI Compare Slider --- */
+
+.recolor-adjusted-wrap {
+  position: relative;
+}
+
+.ai-compare-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  cursor: ew-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ai-compare-container canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 20px);
+  max-height: 50vh;
+  display: block;
+  border-radius: 4px;
+  clip-path: inset(0 0 0 50%);
+}
+
+.ai-compare-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 3px;
+  background: rgba(255, 255, 255, 0.7);
+  transform: translateX(-50%);
+  z-index: 10;
+  pointer-events: none;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+}
+
+.ai-compare-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+.ai-compare-arrow {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.ai-compare-label {
+  position: absolute;
+  bottom: 16px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.65);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  z-index: 11;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.ai-compare-label-left {
+  left: 16px;
+}
+
+.ai-compare-label-right {
+  right: 16px;
+}
+
 /* --- Landing Dual Entry --- */
 
 .landing {
@@ -289,6 +673,234 @@ header h1 {
   font-size: 15px;
   font-weight: 500;
   letter-spacing: 3px;
+}
+
+.pixel-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+/* --- Pixel Coffee Cup (3px grid, 15×16 pixels) --- */
+
+.pixel-coffee-scene {
+  position: relative;
+  width: 48px;
+  height: 76px;
+  margin-bottom: 4px;
+}
+
+/* Steam wisps — 3 animated columns rising from cup */
+.pixel-steam {
+  position: absolute;
+  top: 0;
+  left: 6px;
+  width: 36px;
+  height: 20px;
+}
+
+.pixel-steam span {
+  position: absolute;
+  bottom: 0;
+  width: 3px;
+  height: 3px;
+  background: transparent;
+  animation: steam-rise 2.4s ease-out infinite;
+}
+
+.pixel-steam span:nth-child(1) {
+  left: 4px;
+  box-shadow:
+    0 0 0 0 rgba(255, 255, 255, 0.5),
+    -3px -3px 0 0 rgba(255, 255, 255, 0.4),
+    0 -6px 0 0 rgba(255, 255, 255, 0.3),
+    3px -9px 0 0 rgba(255, 255, 255, 0.2),
+    0 -12px 0 0 rgba(255, 255, 255, 0.1);
+  animation-delay: 0s;
+}
+
+.pixel-steam span:nth-child(2) {
+  left: 15px;
+  box-shadow:
+    0 0 0 0 rgba(255, 255, 255, 0.5),
+    3px -3px 0 0 rgba(255, 255, 255, 0.4),
+    0 -6px 0 0 rgba(255, 255, 255, 0.3),
+    -3px -9px 0 0 rgba(255, 255, 255, 0.2),
+    0 -12px 0 0 rgba(255, 255, 255, 0.1);
+  animation-delay: 0.8s;
+}
+
+.pixel-steam span:nth-child(3) {
+  left: 26px;
+  box-shadow:
+    0 0 0 0 rgba(255, 255, 255, 0.5),
+    -3px -3px 0 0 rgba(255, 255, 255, 0.4),
+    0 -6px 0 0 rgba(255, 255, 255, 0.3),
+    3px -9px 0 0 rgba(255, 255, 255, 0.2),
+    0 -12px 0 0 rgba(255, 255, 255, 0.1);
+  animation-delay: 1.6s;
+}
+
+@keyframes steam-rise {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  60% {
+    opacity: 0.5;
+  }
+  100% {
+    transform: translateY(-16px);
+    opacity: 0;
+  }
+}
+
+/* Coffee cup — 3px pixel grid, all colors inline */
+.pixel-cup {
+  position: absolute;
+  top: 22px;
+  left: 0;
+  width: 3px;
+  height: 3px;
+  background: transparent;
+  box-shadow:
+    /* ── Row 0 (y=0): Rim top — cols 3‑11 ── */
+    9px 0 0 0 #d4c4a8,  12px 0 0 0 #d4c4a8,  15px 0 0 0 #d4c4a8,
+    18px 0 0 0 #d4c4a8,  21px 0 0 0 #d4c4a8,  24px 0 0 0 #d4c4a8,
+    27px 0 0 0 #d4c4a8,  30px 0 0 0 #d4c4a8,  33px 0 0 0 #d4c4a8,
+    /* ── Row 1 (y=3): Rim wider — cols 2‑12 ── */
+    6px 3px 0 0 #d4c4a8,  9px 3px 0 0 #d4c4a8,  12px 3px 0 0 #d4c4a8,
+    15px 3px 0 0 #d4c4a8,  18px 3px 0 0 #d4c4a8,  21px 3px 0 0 #d4c4a8,
+    24px 3px 0 0 #d4c4a8,  27px 3px 0 0 #d4c4a8,  30px 3px 0 0 #d4c4a8,
+    33px 3px 0 0 #d4c4a8,  36px 3px 0 0 #d4c4a8,
+    /* ── Row 2 (y=6): Rim inner — cols 2,12 outer + 3‑11 inner ── */
+    6px 6px 0 0 #d4c4a8,  36px 6px 0 0 #d4c4a8,
+    9px 6px 0 0 #c4b494,  12px 6px 0 0 #c4b494,  15px 6px 0 0 #c4b494,
+    18px 6px 0 0 #c4b494,  21px 6px 0 0 #c4b494,  24px 6px 0 0 #c4b494,
+    27px 6px 0 0 #c4b494,  30px 6px 0 0 #c4b494,  33px 6px 0 0 #c4b494,
+    /* ── Row 3 (y=9): Coffee surface — cup edges + coffee ── */
+    6px 9px 0 0 #f0e6d3,  36px 9px 0 0 #f0e6d3,
+    9px 9px 0 0 #4a2c17,  12px 9px 0 0 #4a2c17,  15px 9px 0 0 #4a2c17,
+    18px 9px 0 0 #4a2c17,  21px 9px 0 0 #4a2c17,  24px 9px 0 0 #4a2c17,
+    27px 9px 0 0 #4a2c17,  30px 9px 0 0 #4a2c17,  33px 9px 0 0 #4a2c17,
+    /* ── Row 4 (y=12): Coffee highlights — alternating ── */
+    6px 12px 0 0 #f0e6d3,  36px 12px 0 0 #f0e6d3,
+    9px 12px 0 0 #4a2c17,  15px 12px 0 0 #4a2c17,
+    21px 12px 0 0 #4a2c17,  27px 12px 0 0 #4a2c17,  33px 12px 0 0 #4a2c17,
+    12px 12px 0 0 #6b3d22,  18px 12px 0 0 #6b3d22,
+    24px 12px 0 0 #6b3d22,  30px 12px 0 0 #6b3d22,
+    /* ── Row 5 (y=15): Coffee deep — darker ── */
+    6px 15px 0 0 #f0e6d3,  36px 15px 0 0 #f0e6d3,
+    9px 15px 0 0 #3e2211,  12px 15px 0 0 #3e2211,  15px 15px 0 0 #3e2211,
+    18px 15px 0 0 #3e2211,  21px 15px 0 0 #3e2211,  24px 15px 0 0 #3e2211,
+    27px 15px 0 0 #3e2211,  30px 15px 0 0 #3e2211,  33px 15px 0 0 #3e2211,
+    /* ── Row 6 (y=18): Cup body top + handle ── */
+    6px 18px 0 0 #f0e6d3,  9px 18px 0 0 #f0e6d3,  12px 18px 0 0 #f0e6d3,
+    15px 18px 0 0 #f0e6d3,  18px 18px 0 0 #f0e6d3,  21px 18px 0 0 #f0e6d3,
+    24px 18px 0 0 #f0e6d3,  27px 18px 0 0 #f0e6d3,  30px 18px 0 0 #f0e6d3,
+    33px 18px 0 0 #f0e6d3,  36px 18px 0 0 #f0e6d3,
+    39px 18px 0 0 #d4c4a8,  42px 18px 0 0 #d4c4a8,
+    /* ── Row 7 (y=21): Cup body + handle outer ── */
+    6px 21px 0 0 #f0e6d3,  9px 21px 0 0 #f0e6d3,
+    33px 21px 0 0 #f0e6d3,  36px 21px 0 0 #f0e6d3,
+    12px 21px 0 0 #e6dac4,  15px 21px 0 0 #e6dac4,  18px 21px 0 0 #e6dac4,
+    21px 21px 0 0 #e6dac4,  24px 21px 0 0 #e6dac4,  27px 21px 0 0 #e6dac4,
+    30px 21px 0 0 #e6dac4,
+    45px 21px 0 0 #d4c4a8,
+    /* ── Row 8 (y=24): Cup body + handle ── */
+    6px 24px 0 0 #ede1cd,  9px 24px 0 0 #ede1cd,
+    33px 24px 0 0 #ede1cd,  36px 24px 0 0 #ede1cd,
+    12px 24px 0 0 #e0d4be,  15px 24px 0 0 #e0d4be,  18px 24px 0 0 #e0d4be,
+    21px 24px 0 0 #e0d4be,  24px 24px 0 0 #e0d4be,  27px 24px 0 0 #e0d4be,
+    30px 24px 0 0 #e0d4be,
+    45px 24px 0 0 #d4c4a8,
+    /* ── Row 9 (y=27): Cup body + handle ── */
+    6px 27px 0 0 #e8dcc6,  9px 27px 0 0 #e8dcc6,
+    33px 27px 0 0 #e8dcc6,  36px 27px 0 0 #e8dcc6,
+    12px 27px 0 0 #daced6,  15px 27px 0 0 #daced6,  18px 27px 0 0 #daced6,
+    21px 27px 0 0 #daced6,  24px 27px 0 0 #daced6,  27px 27px 0 0 #daced6,
+    30px 27px 0 0 #daced6,
+    45px 27px 0 0 #d4c4a8,
+    /* ── Row 10 (y=30): Cup body bottom + handle ── */
+    6px 30px 0 0 #e4d8c0,  9px 30px 0 0 #e4d8c0,  12px 30px 0 0 #e4d8c0,
+    15px 30px 0 0 #e4d8c0,  18px 30px 0 0 #e4d8c0,  21px 30px 0 0 #e4d8c0,
+    24px 30px 0 0 #e4d8c0,  27px 30px 0 0 #e4d8c0,  30px 30px 0 0 #e4d8c0,
+    33px 30px 0 0 #e4d8c0,  36px 30px 0 0 #e4d8c0,
+    39px 30px 0 0 #d4c4a8,  42px 30px 0 0 #d4c4a8,
+    /* ── Row 11 (y=33): Cup narrowing ── */
+    9px 33px 0 0 #e0d4be,  12px 33px 0 0 #e0d4be,
+    30px 33px 0 0 #e0d4be,  33px 33px 0 0 #e0d4be,
+    15px 33px 0 0 #d8ccb4,  18px 33px 0 0 #d8ccb4,
+    21px 33px 0 0 #d8ccb4,  24px 33px 0 0 #d8ccb4,  27px 33px 0 0 #d8ccb4,
+    /* ── Row 12 (y=36): Cup base ── */
+    12px 36px 0 0 #d8ccb4,  15px 36px 0 0 #d8ccb4,  18px 36px 0 0 #d8ccb4,
+    21px 36px 0 0 #d8ccb4,  24px 36px 0 0 #d8ccb4,  27px 36px 0 0 #d8ccb4,
+    30px 36px 0 0 #d8ccb4,
+    /* ── Row 13 (y=39): Saucer top ── */
+    3px 39px 0 0 #d4c4a8,  6px 39px 0 0 #d4c4a8,  9px 39px 0 0 #d4c4a8,
+    12px 39px 0 0 #d4c4a8,  15px 39px 0 0 #d4c4a8,  18px 39px 0 0 #d4c4a8,
+    21px 39px 0 0 #d4c4a8,  24px 39px 0 0 #d4c4a8,  27px 39px 0 0 #d4c4a8,
+    30px 39px 0 0 #d4c4a8,  33px 39px 0 0 #d4c4a8,  36px 39px 0 0 #d4c4a8,
+    39px 39px 0 0 #d4c4a8,
+    /* ── Row 14 (y=42): Saucer wide — outer + inner shade ── */
+    0 42px 0 0 #d4c4a8,  3px 42px 0 0 #d4c4a8,
+    39px 42px 0 0 #d4c4a8,  42px 42px 0 0 #d4c4a8,
+    6px 42px 0 0 #c4b494,  9px 42px 0 0 #c4b494,  12px 42px 0 0 #c4b494,
+    15px 42px 0 0 #c4b494,  18px 42px 0 0 #c4b494,  21px 42px 0 0 #c4b494,
+    24px 42px 0 0 #c4b494,  27px 42px 0 0 #c4b494,  30px 42px 0 0 #c4b494,
+    33px 42px 0 0 #c4b494,  36px 42px 0 0 #c4b494,
+    /* ── Row 15 (y=45): Saucer bottom ── */
+    3px 45px 0 0 #d4c4a8,  6px 45px 0 0 #d4c4a8,  9px 45px 0 0 #d4c4a8,
+    12px 45px 0 0 #d4c4a8,  15px 45px 0 0 #d4c4a8,  18px 45px 0 0 #d4c4a8,
+    21px 45px 0 0 #d4c4a8,  24px 45px 0 0 #d4c4a8,  27px 45px 0 0 #d4c4a8,
+    30px 45px 0 0 #d4c4a8,  33px 45px 0 0 #d4c4a8,  36px 45px 0 0 #d4c4a8,
+    39px 45px 0 0 #d4c4a8;
+}
+
+.pixel-cup-shadow {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  width: 46px;
+  height: 3px;
+  margin-left: -23px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 50%;
+}
+
+/* --- Pixel Dots --- */
+
+.pixel-dots {
+  display: flex;
+  gap: 8px;
+}
+
+.pixel-dots span {
+  display: block;
+  width: 6px;
+  height: 6px;
+  background: var(--text-secondary);
+  animation: pixel-dot-jump 1.2s ease-in-out infinite;
+}
+
+.pixel-dots span:nth-child(2) { animation-delay: 0.15s; }
+.pixel-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes pixel-dot-jump {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.3; }
+  30% { transform: translateY(-8px); opacity: 1; }
+}
+
+/* --- Processing Text --- */
+
+.processing-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  letter-spacing: 2px;
 }
 
 /* --- Workspace --- */

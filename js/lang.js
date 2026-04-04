@@ -316,6 +316,35 @@ PicAnalysis.Lang = (function () {
       recolorDiagCorrected: "Auto-Corrected",
       recolorAutoCorrections: "Auto-Correction Adjustments",
       backToLanding: "Back",
+
+      // API Key Modal
+      apiKeyBtn: "API Key",
+      apiKeyBtnSet: "API Key \u2713",
+      apiKeyModalTitle: "API Key Settings",
+      apiKeyPlaceholder: "Gemini API Key",
+      apiKeySaveLocal: "Save key to local file",
+      apiKeyPathLabel: "Storage path:",
+      apiKeyPathDefault: "Desktop",
+      apiKeyPathChange: "Change",
+      apiKeyLoadFile: "Load key from file",
+      apiKeyConfirm: "Confirm",
+      apiKeyCancel: "Cancel",
+      apiKeySaveSuccess: "API Key saved to file",
+      apiKeySaveError: "Failed to save key: {msg}",
+      apiKeyLoadSuccess: "API Key loaded from file",
+      apiKeyLoadError: "Failed to load key: {msg}",
+      apiKeyNoKey: "Please enter your Gemini API Key",
+
+      // AI Recolor
+      aiRecolorBtn: "AI",
+      aiRecolorProcessing: "AI analyzing...",
+      aiRecolorAnalyzing: "Analyzing image composition...",
+      aiRecolorGenerating: "Generating recolored image...",
+      aiRecolorError: "AI recolor failed: {msg}",
+      aiRecolorNoKey: "Please enter your Gemini API Key first",
+      aiRecolorSchemeLabel: "AI {scheme}",
+      aiCompareLabelLeft: "Programmatic",
+      aiCompareLabelRight: "AI",
     },
 
     zh: {
@@ -616,6 +645,35 @@ PicAnalysis.Lang = (function () {
       recolorDiagCorrected: "校正後",
       recolorAutoCorrections: "自動校正項目",
       backToLanding: "返回",
+
+      // API Key Modal
+      apiKeyBtn: "API Key",
+      apiKeyBtnSet: "API Key \u2713",
+      apiKeyModalTitle: "API Key 設定",
+      apiKeyPlaceholder: "Gemini API Key",
+      apiKeySaveLocal: "允許將 Key 保存至本地檔案",
+      apiKeyPathLabel: "儲存路徑：",
+      apiKeyPathDefault: "桌面",
+      apiKeyPathChange: "變更",
+      apiKeyLoadFile: "從檔案載入 Key",
+      apiKeyConfirm: "確認",
+      apiKeyCancel: "取消",
+      apiKeySaveSuccess: "API Key 已保存至檔案",
+      apiKeySaveError: "保存失敗：{msg}",
+      apiKeyLoadSuccess: "已從檔案載入 API Key",
+      apiKeyLoadError: "載入失敗：{msg}",
+      apiKeyNoKey: "請先輸入 Gemini API Key",
+
+      // AI Recolor
+      aiRecolorBtn: "AI",
+      aiRecolorProcessing: "AI 分析中...",
+      aiRecolorAnalyzing: "正在分析圖片構成元素...",
+      aiRecolorGenerating: "正在生成重配色圖片...",
+      aiRecolorError: "AI 配色失敗：{msg}",
+      aiRecolorNoKey: "請先輸入 Gemini API Key",
+      aiRecolorSchemeLabel: "AI {scheme}",
+      aiCompareLabelLeft: "程式化",
+      aiCompareLabelRight: "AI",
     },
   };
 

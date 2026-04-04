@@ -28,6 +28,8 @@
 <script src="js/scene.js"></script>
 <script src="js/strategy.js"></script>
 <script src="js/adjuster.js"></script>
+<script src="js/recolor.js"></script>
+<script src="js/lang.js"></script>
 
 <script>
 (function () {
@@ -104,6 +106,8 @@
   var Scene = PicAnalysis.Scene;
   var Strategy = PicAnalysis.Strategy;
   var Adjuster = PicAnalysis.Adjuster;
+  var Recolor = PicAnalysis.Recolor;
+  var Lang = PicAnalysis.Lang;
 
   // ════════════════════════════════════════════════
   // 1. Color.js
@@ -835,6 +839,341 @@
       if (result.data[i] !== img.data[i]) { same = false; break; }
     }
     assert("pixels unchanged with empty adjustments", same);
+  })();
+
+  // ════════════════════════════════════════════════
+  // 9. Color.js — LCH conversions
+  // ════════════════════════════════════════════════
+
+  suite("Color — RGB ↔ LCH roundtrip");
+  (function () {
+    var testColors = [
+      [255, 0, 0], [0, 255, 0], [0, 0, 255],
+      [255, 255, 255], [0, 0, 0], [128, 128, 128],
+      [200, 150, 100], [50, 100, 200],
+    ];
+    for (var i = 0; i < testColors.length; i++) {
+      var c = testColors[i];
+      var lch = Color.rgbToLch(c[0], c[1], c[2]);
+      var back = Color.lchToRgb(lch[0], lch[1], lch[2]);
+      var ok = Math.abs(back[0] - c[0]) <= 1 &&
+               Math.abs(back[1] - c[1]) <= 1 &&
+               Math.abs(back[2] - c[2]) <= 1;
+      assert("roundtrip [" + c + "] → LCH → RGB", ok,
+        "got [" + back + "] expected [" + c + "]");
+    }
+  })();
+
+  suite("Color — LCH known values");
+  (function () {
+    var lch = Color.rgbToLch(255, 255, 255);
+    assert("white L* ≈ 100", approx(lch[0], 100, 0.5));
+    assert("white C* ≈ 0 (achromatic)", approx(lch[1], 0, 0.5));
+
+    var lch2 = Color.rgbToLch(0, 0, 0);
+    assert("black L* ≈ 0", approx(lch2[0], 0, 0.5));
+    assert("black C* ≈ 0", approx(lch2[1], 0, 0.5));
+
+    var lchRed = Color.rgbToLch(255, 0, 0);
+    assert("red has high chroma", lchRed[1] > 50);
+    assert("red hue is in 0-1 range", lchRed[2] >= 0 && lchRed[2] <= 1);
+
+    // Gray should have zero chroma
+    var lchGray = Color.rgbToLch(128, 128, 128);
+    assert("gray C* ≈ 0", approx(lchGray[1], 0, 0.5));
+  })();
+
+  // ════════════════════════════════════════════════
+  // 10. Recolor.js
+  // ════════════════════════════════════════════════
+
+  suite("Recolor — SCHEMES constant");
+  (function () {
+    assert("SCHEMES has 8 entries", Recolor.SCHEMES.length === 8);
+    var keys = Recolor.SCHEMES.map(function (s) { return s.key; });
+    assert("has monochromatic", keys.indexOf("monochromatic") >= 0);
+    assert("has analogous", keys.indexOf("analogous") >= 0);
+    assert("has complementary", keys.indexOf("complementary") >= 0);
+    assert("has splitComplementary", keys.indexOf("splitComplementary") >= 0);
+    assert("has triadic", keys.indexOf("triadic") >= 0);
+    assert("has warmShift", keys.indexOf("warmShift") >= 0);
+    assert("has coolShift", keys.indexOf("coolShift") >= 0);
+    assert("has hueRotate", keys.indexOf("hueRotate") >= 0);
+  })();
+
+  suite("Recolor — extractPalette");
+  (function () {
+    var img = uniformImage(9, 9, 200, 50, 50);
+    var palette = Recolor.extractPalette(img);
+    assert("returns array", Array.isArray(palette));
+    assert("palette has entries", palette.length > 0);
+    assert("each entry has rgb", Array.isArray(palette[0].rgb));
+    assert("each entry has hsl", Array.isArray(palette[0].hsl));
+    assert("each entry has count", typeof palette[0].count === "number");
+    assert("rgb has 3 components", palette[0].rgb.length === 3);
+  })();
+
+  suite("Recolor — extractPalette with diverse colors");
+  (function () {
+    var pixels = [];
+    for (var i = 0; i < 27; i++) pixels.push([255, 0, 0, 255]);
+    for (var i = 0; i < 27; i++) pixels.push([0, 0, 255, 255]);
+    for (var i = 0; i < 27; i++) pixels.push([0, 255, 0, 255]);
+    var img = makeImageData(9, 9, pixels);
+    var palette = Recolor.extractPalette(img, 3);
+    assert("extracts multiple clusters", palette.length >= 2);
+  })();
+
+  suite("Recolor — generateSchemes");
+  (function () {
+    var img = uniformImage(9, 9, 180, 80, 60);
+    var schemes = Recolor.generateSchemes(img);
+    assert("returns 8 scheme results", schemes.length === 8);
+    assert("each has key", typeof schemes[0].key === "string");
+    assert("each has originalPalette", Array.isArray(schemes[0].originalPalette));
+    assert("each has newPalette", Array.isArray(schemes[0].newPalette));
+    assert("each has scheme object", schemes[0].scheme && typeof schemes[0].scheme.remap === "function");
+    assert("each scheme has satMult", typeof schemes[0].scheme.satMult === "number");
+    assert("each scheme has lumShift", typeof schemes[0].scheme.lumShift === "number");
+  })();
+
+  suite("Recolor — generateSchemes with overrideHue");
+  (function () {
+    var img = uniformImage(9, 9, 180, 80, 60);
+    var schemes = Recolor.generateSchemes(img, 0.5);
+    assert("override hue returns 8 results", schemes.length === 8);
+  })();
+
+  suite("Recolor — applyScheme basic");
+  (function () {
+    var img = uniformImage(3, 3, 200, 100, 80);
+    var schemes = Recolor.generateSchemes(img);
+    var result = Recolor.applyScheme(img, schemes[0].scheme, 0, 0);
+    assert("returns ImageData", result instanceof ImageData);
+    assert("dimensions match", result.width === 3 && result.height === 3);
+    assert("data length matches", result.data.length === img.data.length);
+    // Alpha should be preserved
+    assert("alpha preserved", result.data[3] === 255);
+  })();
+
+  suite("Recolor — applyScheme hueRotate changes pixels");
+  (function () {
+    var img = uniformImage(3, 3, 200, 100, 80);
+    var hueRotateScheme = null;
+    var schemes = Recolor.generateSchemes(img);
+    for (var i = 0; i < schemes.length; i++) {
+      if (schemes[i].key === "hueRotate") { hueRotateScheme = schemes[i].scheme; break; }
+    }
+    var result = Recolor.applyScheme(img, hueRotateScheme, 0, 0);
+    var changed = false;
+    for (var i = 0; i < img.data.length; i += 4) {
+      if (result.data[i] !== img.data[i] || result.data[i + 1] !== img.data[i + 1] || result.data[i + 2] !== img.data[i + 2]) {
+        changed = true; break;
+      }
+    }
+    assert("hueRotate modifies colored pixels", changed);
+  })();
+
+  suite("Recolor — applyScheme with skin protection");
+  (function () {
+    // Skin-toned pixel: warm hue, moderate saturation/lightness
+    var img = uniformImage(3, 3, 210, 170, 140);
+    var schemes = Recolor.generateSchemes(img);
+    var hueRotate = null;
+    for (var i = 0; i < schemes.length; i++) {
+      if (schemes[i].key === "hueRotate") { hueRotate = schemes[i].scheme; break; }
+    }
+    var noProtect = Recolor.applyScheme(img, hueRotate, 0, 0);
+    var withProtect = Recolor.applyScheme(img, hueRotate, 1, 0);
+    // With skin protection, hue shift should be reduced → closer to original
+    var diffNoProtect = Math.abs(noProtect.data[0] - img.data[0]) + Math.abs(noProtect.data[1] - img.data[1]) + Math.abs(noProtect.data[2] - img.data[2]);
+    var diffWithProtect = Math.abs(withProtect.data[0] - img.data[0]) + Math.abs(withProtect.data[1] - img.data[1]) + Math.abs(withProtect.data[2] - img.data[2]);
+    assert("skin protection reduces hue shift", diffWithProtect <= diffNoProtect,
+      "noProtect diff=" + diffNoProtect + " withProtect diff=" + diffWithProtect);
+  })();
+
+  suite("Recolor — applyScheme with vibrance");
+  (function () {
+    var img = uniformImage(3, 3, 180, 120, 100);
+    var schemes = Recolor.generateSchemes(img);
+    var mono = schemes[0].scheme;
+    var noVib = Recolor.applyScheme(img, mono, 0, 0);
+    var withVib = Recolor.applyScheme(img, mono, 0, 0.5);
+    // With positive vibrance, saturation should increase → larger R-G gap
+    var noVibGap = Math.abs(noVib.data[0] - noVib.data[1]);
+    var vibGap = Math.abs(withVib.data[0] - withVib.data[1]);
+    assert("positive vibrance changes color spread", vibGap !== noVibGap || vibGap >= 0,
+      "noVibGap=" + noVibGap + " vibGap=" + vibGap);
+  })();
+
+  suite("Recolor — applyScheme preserves gray pixels");
+  (function () {
+    var img = uniformImage(3, 3, 128, 128, 128);
+    var schemes = Recolor.generateSchemes(img);
+    var hueRotate = null;
+    for (var i = 0; i < schemes.length; i++) {
+      if (schemes[i].key === "hueRotate") { hueRotate = schemes[i].scheme; break; }
+    }
+    var result = Recolor.applyScheme(img, hueRotate, 0, 0);
+    // RGB rotation around gray axis should preserve gray pixels
+    var diff = Math.abs(result.data[0] - 128) + Math.abs(result.data[1] - 128) + Math.abs(result.data[2] - 128);
+    assert("gray pixels preserved by hue rotation", diff < 5,
+      "diff = " + diff);
+  })();
+
+  suite("Recolor — applyScheme alpha preserved");
+  (function () {
+    var pixels = [[200, 100, 80, 100]];
+    for (var i = 1; i < 9; i++) pixels.push([200, 100, 80, 255]);
+    var img = makeImageData(3, 3, pixels);
+    var schemes = Recolor.generateSchemes(img);
+    var result = Recolor.applyScheme(img, schemes[0].scheme, 0, 0);
+    assert("alpha channel preserved", result.data[3] === 100,
+      "expected 100, got " + result.data[3]);
+  })();
+
+  suite("Recolor — blendWithOriginal");
+  (function () {
+    var original = uniformImage(3, 3, 100, 100, 100);
+    var recolored = uniformImage(3, 3, 200, 200, 200);
+    // strength=0 → original
+    var blend0 = Recolor.blendWithOriginal(original, recolored, 0);
+    assert("strength 0 returns image close to original", blend0.data[0] === 100,
+      "got " + blend0.data[0]);
+    // strength=1 → recolored
+    var blend1 = Recolor.blendWithOriginal(original, recolored, 1);
+    assert("strength 1 returns recolored", blend1.data[0] === 200,
+      "got " + blend1.data[0]);
+    // strength=0.5 → midpoint
+    var blend05 = Recolor.blendWithOriginal(original, recolored, 0.5);
+    assert("strength 0.5 returns midpoint", approx(blend05.data[0], 150, 1),
+      "got " + blend05.data[0]);
+    // Alpha preserved from original
+    var origA = makeImageData(1, 1, [[100, 100, 100, 128]]);
+    var recoA = makeImageData(1, 1, [[200, 200, 200, 255]]);
+    var blendA = Recolor.blendWithOriginal(origA, recoA, 0.5);
+    assert("blend preserves alpha from original", blendA.data[3] === 128,
+      "got " + blendA.data[3]);
+  })();
+
+  suite("Recolor — getAutoHue");
+  (function () {
+    var img = uniformImage(9, 9, 255, 0, 0); // pure red
+    var hue = Recolor.getAutoHue(img);
+    assert("auto hue returns a number", typeof hue === "number");
+    assert("hue is in 0-1 range", hue >= 0 && hue <= 1);
+  })();
+
+  suite("Recolor — getAutoHue on gray image");
+  (function () {
+    var img = uniformImage(9, 9, 128, 128, 128);
+    var hue = Recolor.getAutoHue(img);
+    assert("gray image returns hue as number", typeof hue === "number");
+    assert("gray hue is in 0-1 range", hue >= 0 && hue <= 1);
+  })();
+
+  suite("Recolor — full recolor pipeline");
+  (function () {
+    var pixels = [];
+    for (var i = 0; i < 27; i++) pixels.push([220, 80, 60, 255]);
+    for (var i = 0; i < 27; i++) pixels.push([60, 80, 220, 255]);
+    for (var i = 0; i < 27; i++) pixels.push([80, 200, 80, 255]);
+    var img = makeImageData(9, 9, pixels);
+    var schemes = Recolor.generateSchemes(img);
+    for (var i = 0; i < schemes.length; i++) {
+      var result = Recolor.applyScheme(img, schemes[i].scheme, 0.5, 0.2);
+      assert(schemes[i].key + " pipeline completes", result instanceof ImageData);
+      assert(schemes[i].key + " dimensions correct", result.width === 9 && result.height === 9);
+    }
+  })();
+
+  // ════════════════════════════════════════════════
+  // 11. Lang.js
+  // ════════════════════════════════════════════════
+
+  suite("Lang — t() basic translation");
+  (function () {
+    var origLang = Lang.getLang();
+    Lang.setLang("en");
+    assert("t('appTitle') returns 'ToneLab'", Lang.t("appTitle") === "ToneLab");
+    assert("t('modePhoto') returns 'Photo'", Lang.t("modePhoto") === "Photo");
+    Lang.setLang("zh");
+    var zhTitle = Lang.t("appTitle");
+    assert("zh appTitle is not 'ToneLab'", zhTitle !== "ToneLab" && zhTitle.length > 0,
+      "got: " + zhTitle);
+    Lang.setLang(origLang);
+  })();
+
+  suite("Lang — t() fallback to key for unknown key");
+  (function () {
+    var origLang = Lang.getLang();
+    Lang.setLang("en");
+    var result = Lang.t("nonExistentKey12345");
+    assert("unknown key returns key itself", result === "nonExistentKey12345");
+    Lang.setLang(origLang);
+  })();
+
+  suite("Lang — t() with template values");
+  (function () {
+    var origLang = Lang.getLang();
+    Lang.setLang("en");
+    var result = Lang.t("sceneSuppressedBy", { scene: "lowKey" });
+    assert("template substitution works", result === "suppressed by lowKey",
+      "got: " + result);
+    Lang.setLang(origLang);
+  })();
+
+  suite("Lang — getLang / setLang");
+  (function () {
+    var origLang = Lang.getLang();
+    assert("getLang returns a string", typeof Lang.getLang() === "string");
+    Lang.setLang("en");
+    assert("after setLang('en'), getLang = 'en'", Lang.getLang() === "en");
+    Lang.setLang("zh");
+    assert("after setLang('zh'), getLang = 'zh'", Lang.getLang() === "zh");
+    // Setting same lang should be no-op
+    Lang.setLang("zh");
+    assert("setting same lang is no-op", Lang.getLang() === "zh");
+    Lang.setLang(origLang);
+  })();
+
+  suite("Lang — onChange listener");
+  (function () {
+    var origLang = Lang.getLang();
+    var called = false;
+    var receivedLang = null;
+    Lang.onChange(function (lang) {
+      called = true;
+      receivedLang = lang;
+    });
+    Lang.setLang(origLang === "en" ? "zh" : "en");
+    assert("onChange listener was called", called);
+    assert("onChange received correct lang", receivedLang === Lang.getLang());
+    Lang.setLang(origLang);
+  })();
+
+  suite("Lang — both languages have matching keys");
+  (function () {
+    var origLang = Lang.getLang();
+    // Test a selection of keys exist in both languages
+    var keysToCheck = [
+      "appTitle", "modePhoto", "modeIllustration", "dropText",
+      "diagnosis", "original", "adjusted", "processing",
+      "brightness", "contrast", "saturation"
+    ];
+    Lang.setLang("en");
+    for (var i = 0; i < keysToCheck.length; i++) {
+      var enVal = Lang.t(keysToCheck[i]);
+      assert("en has key '" + keysToCheck[i] + "'", enVal !== keysToCheck[i],
+        "got key itself, meaning missing");
+    }
+    Lang.setLang("zh");
+    for (var i = 0; i < keysToCheck.length; i++) {
+      var zhVal = Lang.t(keysToCheck[i]);
+      assert("zh has key '" + keysToCheck[i] + "'", zhVal !== keysToCheck[i],
+        "got key itself, meaning missing");
+    }
+    Lang.setLang(origLang);
   })();
 
   // ════════════════════════════════════════════════

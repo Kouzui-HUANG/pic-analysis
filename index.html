@@ -4,13 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ToneLab</title>
-  <link rel="stylesheet" href="css/style.css?v=11">
+  <link rel="stylesheet" href="css/style.css?v=13">
 </head>
 <body>
 
   <header>
     <h1 id="app-title">調色研究所</h1>
     <div class="header-actions">
+      <button id="api-key-btn" class="api-key-btn" type="button">API Key</button>
       <div class="mode-toggle" id="mode-toggle">
         <button id="mode-photo" class="mode-btn active">攝影</button>
         <button id="mode-illustration" class="mode-btn">電繪</button>
@@ -63,7 +64,19 @@
   <input type="file" id="file-input-recolor" accept="image/*">
 
   <!-- Processing overlay -->
-  <div id="processing-overlay" class="hidden">處理中...</div>
+  <div id="processing-overlay" class="hidden">
+    <div class="pixel-loader">
+      <div class="pixel-coffee-scene">
+        <div class="pixel-steam">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="pixel-cup"></div>
+        <div class="pixel-cup-shadow"></div>
+      </div>
+      <div class="pixel-dots"><span></span><span></span><span></span></div>
+      <span class="processing-text">處理中...</span>
+    </div>
+  </div>
 
   <!-- Workspace (hidden until image loaded) -->
   <div class="workspace hidden">
@@ -142,9 +155,22 @@
           <h2 id="recolor-scheme-name">配色方案</h2>
           <span id="recolor-scheme-counter" class="recolor-counter">1 / 8</span>
           <button id="recolor-next" class="recolor-nav-btn">&rarr;</button>
+          <button id="ai-recolor-btn" class="ai-recolor-btn" type="button">AI</button>
         </div>
-        <div class="canvas-wrap">
+        <div class="canvas-wrap recolor-adjusted-wrap" id="recolor-adjusted-wrap">
           <canvas id="recolor-adjusted-canvas"></canvas>
+          <!-- AI comparison overlay (hidden until AI result ready) -->
+          <div id="ai-compare-container" class="ai-compare-container hidden">
+            <canvas id="recolor-ai-canvas"></canvas>
+            <div id="ai-compare-divider" class="ai-compare-divider">
+              <div class="ai-compare-handle">
+                <span class="ai-compare-arrow">&lsaquo;</span>
+                <span class="ai-compare-arrow">&rsaquo;</span>
+              </div>
+            </div>
+            <span class="ai-compare-label ai-compare-label-left">Programmatic</span>
+            <span class="ai-compare-label ai-compare-label-right">AI</span>
+          </div>
         </div>
       </div>
     </div>
@@ -228,15 +254,42 @@
     <div id="recolor-adjustments-panel"></div>
   </div>
 
+  <!-- API Key Modal -->
+  <div id="api-key-modal" class="modal-overlay hidden">
+    <div class="modal-dialog">
+      <h3 class="modal-title" id="api-key-modal-title">API Key 設定</h3>
+      <div class="modal-body">
+        <div class="modal-input-group">
+          <input type="password" id="api-key-input" class="modal-input" placeholder="Gemini API Key" autocomplete="off" spellcheck="false">
+          <button id="api-key-toggle" class="modal-input-toggle" type="button" title="Show/Hide">👁</button>
+        </div>
+        <label class="modal-checkbox-label">
+          <input type="checkbox" id="api-key-save-check">
+          <span id="api-key-save-text">允許將 Key 保存至本地檔案</span>
+        </label>
+        <div id="api-key-path-row" class="modal-path-row hidden">
+          <span class="modal-path-label" id="api-key-path-label">儲存路徑：</span>
+          <span class="modal-path-value" id="api-key-path-value">桌面</span>
+          <button id="api-key-path-change" class="modal-path-btn" type="button">變更</button>
+        </div>
+        <button id="api-key-load-btn" class="modal-load-btn" type="button">從檔案載入 Key</button>
+      </div>
+      <div class="modal-footer">
+        <button id="api-key-cancel" class="modal-btn modal-btn-secondary" type="button">取消</button>
+        <button id="api-key-confirm" class="modal-btn modal-btn-primary" type="button">確認</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Scripts: loaded in dependency order -->
-  <script src="js/color.js?v=11"></script>
-  <script src="js/stats.js?v=11"></script>
-  <script src="js/lang.js?v=11"></script>
-  <script src="js/analyzer.js?v=11"></script>
-  <script src="js/scene.js?v=11"></script>
-  <script src="js/strategy.js?v=11"></script>
-  <script src="js/adjuster.js?v=11"></script>
-  <script src="js/recolor.js?v=11"></script>
-  <script src="js/main.js?v=11"></script>
+  <script src="js/color.js?v=13"></script>
+  <script src="js/stats.js?v=13"></script>
+  <script src="js/lang.js?v=13"></script>
+  <script src="js/analyzer.js?v=13"></script>
+  <script src="js/scene.js?v=13"></script>
+  <script src="js/strategy.js?v=13"></script>
+  <script src="js/adjuster.js?v=13"></script>
+  <script src="js/recolor.js?v=16"></script>
+  <script src="js/main.js?v=13"></script>
 </body>
 </html>

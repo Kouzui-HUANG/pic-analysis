@@ -24,25 +24,30 @@ PicAnalysis.Recolor = (function () {
 
     var maxSamples = 3000;
     var totalPixels = w * h;
-    var step = Math.max(1, Math.floor(totalPixels / maxSamples));
-    var points = [];
+    var sampleCount = Math.min(totalPixels, maxSamples);
+    var step = totalPixels / sampleCount;
 
-    for (var i = 0; i < totalPixels; i += step) {
-      var idx = i * 4;
-      points.push([data[idx], data[idx + 1], data[idx + 2]]);
+    // Jittered sampling: resist spatial patterns better than uniform step
+    var labPoints = [];
+    for (var i = 0; i < sampleCount; i++) {
+      var base = Math.floor(i * step);
+      var jitter = Math.floor(Math.random() * Math.min(step, totalPixels - base));
+      var pixIdx = Math.min(base + jitter, totalPixels - 1);
+      var idx = pixIdx * 4;
+      var lab = Color.rgbToLab(data[idx], data[idx + 1], data[idx + 2]);
+      labPoints.push([lab[0], lab[1], lab[2]]);
     }
 
-    var clusters = Stats.kMeans(points, k, 20);
+    // Cluster in perceptually uniform LAB space
+    var clusters = Stats.kMeans(labPoints, k, 20);
     clusters.sort(function (a, b) { return b.count - a.count; });
 
     var palette = [];
     for (var i = 0; i < clusters.length; i++) {
       var c = clusters[i];
-      var r = Math.round(c.center[0]);
-      var g = Math.round(c.center[1]);
-      var b = Math.round(c.center[2]);
-      var hsl = Color.rgbToHsl(r, g, b);
-      palette.push({ rgb: [r, g, b], hsl: hsl, count: c.count });
+      var rgb = Color.labToRgb(c.center[0], c.center[1], c.center[2]);
+      var hsl = Color.rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      palette.push({ rgb: rgb, hsl: hsl, count: c.count });
     }
     return palette;
   }
@@ -124,58 +129,73 @@ PicAnalysis.Recolor = (function () {
     });
   }
 
-  function schemeComplementary(palette, overrideHue) {
+  function schemeComplementary(palette, overrideHue, medianL) {
     var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
     var complement = (baseHue + 0.5) % 1;
+    var mid = Math.max(0.2, Math.min(0.8, medianL || 0.5));
     return makeScheme(function (h, s, l) {
-      var keep = smoothstep((l - 0.35) / 0.30);
+      var keep = smoothstep((l - (mid - 0.15)) / 0.30);
       return circularLerp(complement, baseHue, keep);
     });
   }
 
-  function schemeSplitComplementary(palette, overrideHue) {
+  function schemeSplitComplementary(palette, overrideHue, medianL) {
     var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
     var pole1 = (baseHue + 150 / 360) % 1;
     var pole2 = (baseHue + 210 / 360) % 1;
+    var mid = Math.max(0.2, Math.min(0.8, medianL || 0.5));
     return makeScheme(function (h, s, l) {
-      if (l < 0.45) {
-        var blend = smoothstep(l / 0.45);
+      if (l < mid) {
+        var blend = smoothstep(l / mid);
         return circularLerp(pole2, baseHue, blend);
       }
-      var blend = smoothstep((l - 0.45) / 0.45);
+      var blend = smoothstep((l - mid) / (1 - mid));
       return circularLerp(baseHue, pole1, blend);
     });
   }
 
-  function schemeTriadic(palette, overrideHue) {
+  function schemeTriadic(palette, overrideHue, medianL) {
     var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
     var pole1 = (baseHue + 1 / 3) % 1;
     var pole2 = (baseHue + 2 / 3) % 1;
+    var mid = Math.max(0.2, Math.min(0.8, medianL || 0.5));
     return makeScheme(function (h, s, l) {
-      if (l < 0.45) {
-        var blend = smoothstep(l / 0.45);
+      if (l < mid) {
+        var blend = smoothstep(l / mid);
         return circularLerp(pole2, baseHue, blend);
       }
-      var blend = smoothstep((l - 0.45) / 0.45);
+      var blend = smoothstep((l - mid) / (1 - mid));
       return circularLerp(baseHue, pole1, blend);
     });
   }
 
+  // Adaptive temperature shift: pixels far from target get pushed harder
+  // to avoid landing in undesirable intermediate hue zones (e.g. green).
+  // Near pixels get a gentle nudge; opposite-side pixels get nearly full pull.
+  function temperatureShift(h, s, target) {
+    var dist = hueDist(h, target);          // signed distance toward target
+    var absDist = Math.abs(dist);
+    // Adaptive strength: close hues get gentle nudge, far hues get strong push
+    // Range 0.45→0.82 — high enough to clear intermediate zones (green),
+    // low enough to preserve hue variety in the result.
+    var t = smoothstep(absDist / 0.42);
+    var strength = 0.45 + 0.37 * t;
+    // Only dampen near-achromatic pixels (s < ~0.20); chromatic pixels get full shift
+    var satWeight = Math.min(1, smoothstep(s / 0.22));
+    return ((h + dist * strength * satWeight) % 1 + 1) % 1;
+  }
+
   function schemeWarmShift(palette, overrideHue) {
-    var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
     var warmTarget = 30 / 360;
-    var rotation = hueDist(baseHue, warmTarget) * 0.55;
-    return makeScheme(function (h) {
-      return ((h + rotation) % 1 + 1) % 1;
+    return makeScheme(function (h, s) {
+      return temperatureShift(h, s, warmTarget);
     }, 1.08);
   }
 
   function schemeCoolShift(palette, overrideHue) {
-    var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
     var coolTarget = 210 / 360;
-    var rotation = hueDist(baseHue, coolTarget) * 0.55;
-    return makeScheme(function (h) {
-      return ((h + rotation) % 1 + 1) % 1;
+    return makeScheme(function (h, s) {
+      return temperatureShift(h, s, coolTarget);
     }, 1.08);
   }
 
@@ -326,25 +346,49 @@ PicAnalysis.Recolor = (function () {
     var result = [];
     for (var i = 0; i < palette.length; i++) {
       var p = palette[i];
-      var newH = remap(p.hsl[0], p.hsl[1], p.hsl[2]);
-      var newS = Color.clamp(p.hsl[1] * satMult, 0, 1);
-      var newL = Color.clamp(p.hsl[2] + scheme.lumShift, 0, 1);
-      var rgb = Color.hslToRgb(newH, newS, newL);
-      result.push({ rgb: rgb, hsl: [newH, newS, newL], count: p.count });
+      var newHhsl = remap(p.hsl[0], p.hsl[1], p.hsl[2]);
+      // LCH-based remapping: preserve perceptual lightness, shift hue uniformly
+      var lch = Color.rgbToLch(p.rgb[0], p.rgb[1], p.rgb[2]);
+      var hueShift = newHhsl - p.hsl[0];
+      var newLchH = ((lch[2] + hueShift) % 1 + 1) % 1;
+      var newC = Math.max(0, lch[1] * satMult);
+      var newL = Color.clamp(lch[0] + scheme.lumShift * 100, 0, 100);
+      var rgb = Color.lchToRgb(newL, newC, newLchH);
+      var hsl = Color.rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      result.push({ rgb: rgb, hsl: hsl, count: p.count });
     }
     return result;
   }
 
   // --- Public API ---
 
+  // Weighted median lightness from palette (for adaptive split points)
+  function paletteMedianL(palette) {
+    var items = [];
+    var total = 0;
+    for (var i = 0; i < palette.length; i++) {
+      items.push({ l: palette[i].hsl[2], count: palette[i].count });
+      total += palette[i].count;
+    }
+    items.sort(function (a, b) { return a.l - b.l; });
+    var half = total / 2;
+    var cum = 0;
+    for (var i = 0; i < items.length; i++) {
+      cum += items[i].count;
+      if (cum >= half) return items[i].l;
+    }
+    return 0.5;
+  }
+
   // overrideHue: null = auto-detect, 0-1 = specific hue (hue wheel fraction)
   function generateSchemes(imageData, overrideHue) {
     var palette = extractPalette(imageData);
     var hueArg = overrideHue != null ? overrideHue : null;
+    var medianL = paletteMedianL(palette);
     var results = [];
     for (var i = 0; i < SCHEMES.length; i++) {
       var schemeDef = SCHEMES[i];
-      var scheme = schemeDef.fn(palette, hueArg);
+      var scheme = schemeDef.fn(palette, hueArg, medianL);
       var newPalette = remapPalette(palette, scheme);
       results.push({
         key: schemeDef.key,

@@ -41,7 +41,7 @@
   var recolorScenes = null;          // scenes detected from original recolor image
   var recolorAdjustments = null;     // auto-correction adjustments applied after recolor
   var recolorCorrectedDiag = null;   // diagnosis of auto-corrected recolor result
-  var recolorCorrectedCache = [];    // pre-computed auto-correction for each scheme
+  var recolorCorrectedCache = {};    // mode → [] pre-computed auto-correction for each scheme
   var recolorStrengthDebounceTimer = null;
 
   // --- DOM refs ---
@@ -65,6 +65,7 @@
   var backBtn = $("#back-btn");
   var resetBtn = $("#reset-btn");
   var processingOverlay = $("#processing-overlay");
+  var processingText = processingOverlay.querySelector(".processing-text");
   var langBtn = $("#lang-btn");
   var uploadBtn = $("#upload-btn");
   var modePhotoBtn = $("#mode-photo");
@@ -164,8 +165,14 @@
       if (recolorAdjustments) renderAdjustments(recolorAdjustments, $("#recolor-adjustments-panel"));
     }
 
+    // API key modal + AI button + compare labels
+    updateApiKeyModalText();
+    $("#ai-recolor-btn").textContent = t("aiRecolorBtn");
+    $(".ai-compare-label-left").textContent = t("aiCompareLabelLeft");
+    $(".ai-compare-label-right").textContent = t("aiCompareLabelRight");
+
     // Processing
-    processingOverlay.textContent = t("processing");
+    processingText.textContent = t("processing");
 
     // Panel titles
     $("#title-original").textContent = t("original");
@@ -301,8 +308,13 @@
       resetBtn.style.display = "none";
       downloadBtn.onclick = function () {
         var link = document.createElement("a");
-        link.download = "recolored.png";
-        link.href = $("#recolor-adjusted-canvas").toDataURL("image/png");
+        if (aiResultCache[recolorCurrentIndex]) {
+          link.download = "recolored-ai.png";
+          link.href = $("#recolor-ai-canvas").toDataURL("image/png");
+        } else {
+          link.download = "recolored.png";
+          link.href = $("#recolor-adjusted-canvas").toDataURL("image/png");
+        }
         link.click();
       };
     }
@@ -376,6 +388,9 @@
 
         showFeature("recolor");
         showProcessing(true);
+
+        // Clear all cached AI results for previous image
+        resetAiCache();
 
         // Reset controls for new image
         recolorStrength = 60;
@@ -1014,27 +1029,58 @@
   // --- Recolor auto-correction (applies tonelab pipeline to recolored output) ---
 
   // Core: run pipeline on a single recolored ImageData → { corrected, adjustments, correctedDiag }
-  function autoCorrectRecolored(recoloredData) {
+  // mode: optional — defaults to currentMode for backward compat
+  function autoCorrectRecolored(recoloredData, mode) {
+    var m = mode || currentMode;
     var diag = Analyzer.analyze(recoloredData);
     var scenes = recolorScenes || [];
-    var modeParams = Strategy.defaultParams(currentMode);
-    var adjustments = Strategy.route(diag, modeParams, scenes, currentMode);
+    var modeParams = Strategy.defaultParams(m);
+    var adjustments = Strategy.route(diag, modeParams, scenes, m);
     var corrected = Adjuster.adjust(recoloredData, adjustments);
     var correctedDiag = Analyzer.analyze(corrected);
     return { corrected: corrected, adjustments: adjustments, correctedDiag: correctedDiag };
   }
 
-  // Pre-compute auto-correction for ALL schemes at current strength.
-  // Called once during load / regenerate / mode-switch / strength-change.
-  // After this, left/right switching is instant (cache lookup only).
+  // Pre-compute auto-correction for ALL schemes × BOTH modes at current strength.
+  // Builds current mode synchronously (immediate display), then the other mode
+  // asynchronously in chunks to avoid blocking the main thread.
+  var _bgBuildTimer = null;
   function buildRecolorCorrectionCache() {
-    recolorCorrectedCache = [];
+    if (_bgBuildTimer) { clearTimeout(_bgBuildTimer); _bgBuildTimer = null; }
     var strength = recolorStrength / 100;
+
+    // Build blended data once (shared by both modes)
+    var blendedArr = [];
     for (var i = 0; i < recolorSchemes.length; i++) {
-      var blended = strength >= 1 ? recolorResults[i]
-        : Recolor.blendWithOriginal(recolorImageData, recolorResults[i], strength);
-      recolorCorrectedCache.push(autoCorrectRecolored(blended));
+      blendedArr.push(strength >= 1 ? recolorResults[i]
+        : Recolor.blendWithOriginal(recolorImageData, recolorResults[i], strength));
     }
+
+    // Synchronous: build cache for current mode (needed immediately)
+    var currentCache = [];
+    for (var i = 0; i < recolorSchemes.length; i++) {
+      currentCache.push(autoCorrectRecolored(blendedArr[i], currentMode));
+    }
+    recolorCorrectedCache = {};
+    recolorCorrectedCache[currentMode] = currentCache;
+
+    // Async: build cache for the other mode in background chunks
+    var otherMode = currentMode === MODES.PHOTO ? MODES.ILLUSTRATION : MODES.PHOTO;
+    var otherCache = [];
+    var idx = 0;
+    function buildNextChunk() {
+      var end = Math.min(idx + 2, recolorSchemes.length);
+      for (; idx < end; idx++) {
+        otherCache.push(autoCorrectRecolored(blendedArr[idx], otherMode));
+      }
+      if (idx < recolorSchemes.length) {
+        _bgBuildTimer = setTimeout(buildNextChunk, 0);
+      } else {
+        recolorCorrectedCache[otherMode] = otherCache;
+        _bgBuildTimer = null;
+      }
+    }
+    _bgBuildTimer = setTimeout(buildNextChunk, 0);
   }
 
   function renderRecolorAnalysis(origDiag, correctedDiag, scenes, adjustments) {
@@ -1044,20 +1090,44 @@
     renderAdjustments(adjustments, $("#recolor-adjustments-panel"));
   }
 
-  // Called on mode switch while in recolor — rebuild entire cache with new mode params
+  // Called on mode switch while in recolor — programmatic corrections are pre-cached
+  // for both modes. If the other mode's cache isn't ready yet, build it now.
+  // AI corrections are re-computed from raw cache.
   function rerunRecolorAutoCorrection() {
     if (!recolorSchemes || !recolorResults.length) return;
-    showProcessing(true);
-    setTimeout(function () {
-      buildRecolorCorrectionCache();
-      displayCachedRecolorScheme(recolorCurrentIndex);
-      showProcessing(false);
-    }, 30);
+    // If the other mode's cache isn't ready, build it synchronously now
+    if (!recolorCorrectedCache[currentMode]) {
+      var strength = recolorStrength / 100;
+      var cache = [];
+      for (var i = 0; i < recolorSchemes.length; i++) {
+        var blended = strength >= 1 ? recolorResults[i]
+          : Recolor.blendWithOriginal(recolorImageData, recolorResults[i], strength);
+        cache.push(autoCorrectRecolored(blended, currentMode));
+      }
+      recolorCorrectedCache[currentMode] = cache;
+    }
+    displayCachedRecolorScheme(recolorCurrentIndex);
+    // Re-correct all cached AI results for the new mode and refresh overlay
+    if (aiRawCache[recolorCurrentIndex]) {
+      correctAllAiForCurrentMode();
+      var aiCanvas = $("#recolor-ai-canvas");
+      var rAdjCanvas = $("#recolor-adjusted-canvas");
+      aiCanvas.width = rAdjCanvas.width;
+      aiCanvas.height = rAdjCanvas.height;
+      aiCanvas.getContext("2d").putImageData(aiResultCache[recolorCurrentIndex], 0, 0);
+      showAiCompare(true);
+      setAiComparePosition(aiComparePositions[recolorCurrentIndex] != null ? aiComparePositions[recolorCurrentIndex] : 0.5);
+      var scheme = recolorSchemes[recolorCurrentIndex];
+      var schemeName = t("recolor." + scheme.key);
+      $("#recolor-scheme-name").textContent = t("aiRecolorSchemeLabel", { scheme: schemeName });
+    } else {
+      showAiCompare(false);
+    }
   }
 
   // Display a scheme from the pre-computed cache (instant, no pipeline work)
   function displayCachedRecolorScheme(idx) {
-    var cached = recolorCorrectedCache[idx];
+    var cached = recolorCorrectedCache[currentMode][idx];
     recolorAdjustments = cached.adjustments;
     recolorCorrectedDiag = cached.correctedDiag;
 
@@ -1078,7 +1148,7 @@
     var scheme = recolorSchemes[idx];
 
     // Display auto-corrected image from pre-computed cache (instant)
-    if (recolorCorrectedCache.length > idx) {
+    if (recolorCorrectedCache[currentMode] && recolorCorrectedCache[currentMode].length > idx) {
       displayCachedRecolorScheme(idx);
     }
 
@@ -1289,6 +1359,653 @@
     buildControls();
     if (originalImageData) runPipeline();
   });
+
+  // --- API Key Modal System ---
+
+  var API_KEY_PATH_STORAGE = "tonelab_apikey_path";
+  var API_KEY_SAVE_PREF = "tonelab_apikey_save_pref";
+  var IDB_NAME = "tonelab_apikey_db";
+  var IDB_STORE = "handles";
+  var IDB_KEY = "apiKeyFileHandle";
+  var currentApiKey = "";
+  var savedFileHandle = null;
+
+  // --- IndexedDB helpers for persisting FileSystemFileHandle ---
+  function openIDB() {
+    return new Promise(function (resolve, reject) {
+      var req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = function () {
+        req.result.createObjectStore(IDB_STORE);
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+
+  function saveHandleToIDB(handle) {
+    return openIDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).put(handle, IDB_KEY);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+
+  function loadHandleFromIDB() {
+    return openIDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(IDB_STORE, "readonly");
+        var req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+        req.onsuccess = function () { resolve(req.result || null); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+
+  function clearHandleFromIDB() {
+    return openIDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).delete(IDB_KEY);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+
+  var apiKeyBtn = $("#api-key-btn");
+  var apiKeyModal = $("#api-key-modal");
+  var apiKeyInput = $("#api-key-input");
+  var apiKeyToggle = $("#api-key-toggle");
+  var apiKeySaveCheck = $("#api-key-save-check");
+  var apiKeyPathRow = $("#api-key-path-row");
+  var apiKeyPathValue = $("#api-key-path-value");
+  var apiKeyPathChange = $("#api-key-path-change");
+  var apiKeyLoadBtn = $("#api-key-load-btn");
+  var apiKeyConfirm = $("#api-key-confirm");
+  var apiKeyCancel = $("#api-key-cancel");
+
+  function updateApiKeyBtnState() {
+    if (currentApiKey) {
+      apiKeyBtn.textContent = t("apiKeyBtnSet");
+      apiKeyBtn.classList.add("has-key");
+    } else {
+      apiKeyBtn.textContent = t("apiKeyBtn");
+      apiKeyBtn.classList.remove("has-key");
+    }
+  }
+
+  function updateApiKeyModalText() {
+    $("#api-key-modal-title").textContent = t("apiKeyModalTitle");
+    apiKeyInput.placeholder = t("apiKeyPlaceholder");
+    $("#api-key-save-text").textContent = t("apiKeySaveLocal");
+    $("#api-key-path-label").textContent = t("apiKeyPathLabel");
+    apiKeyPathChange.textContent = t("apiKeyPathChange");
+    apiKeyLoadBtn.textContent = t("apiKeyLoadFile");
+    apiKeyConfirm.textContent = t("apiKeyConfirm");
+    apiKeyCancel.textContent = t("apiKeyCancel");
+    updateApiKeyBtnState();
+    // Update path display
+    var savedPath = localStorage.getItem(API_KEY_PATH_STORAGE);
+    apiKeyPathValue.textContent = savedPath || t("apiKeyPathDefault");
+  }
+
+  function openApiKeyModal() {
+    apiKeyInput.value = currentApiKey;
+    apiKeyInput.type = "password";
+    var savePref = localStorage.getItem(API_KEY_SAVE_PREF) === "true";
+    apiKeySaveCheck.checked = savePref;
+    apiKeyPathRow.classList.toggle("hidden", !savePref);
+    var savedPath = localStorage.getItem(API_KEY_PATH_STORAGE);
+    apiKeyPathValue.textContent = savedPath || t("apiKeyPathDefault");
+    apiKeyModal.classList.remove("hidden");
+    apiKeyInput.focus();
+  }
+
+  function closeApiKeyModal() {
+    apiKeyModal.classList.add("hidden");
+  }
+
+  apiKeyBtn.addEventListener("click", openApiKeyModal);
+
+  apiKeyToggle.addEventListener("click", function () {
+    var isPassword = apiKeyInput.type === "password";
+    apiKeyInput.type = isPassword ? "text" : "password";
+  });
+
+  apiKeySaveCheck.addEventListener("change", function () {
+    apiKeyPathRow.classList.toggle("hidden", !apiKeySaveCheck.checked);
+  });
+
+  // Save key to a local file via File System Access API
+  function saveKeyToFile(key, pickNew) {
+    var opts = {
+      types: [{ description: "API Key file", accept: { "application/json": [".json"] } }],
+      suggestedName: "tonelab-apikey.json"
+    };
+    var handlePromise;
+    if (pickNew || !savedFileHandle) {
+      if (!window.showSaveFilePicker) {
+        // Fallback: download as file
+        var blob = new Blob([JSON.stringify({ apiKey: key })], { type: "application/json" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "tonelab-apikey.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        localStorage.setItem(API_KEY_SAVE_PREF, "true");
+        localStorage.setItem(API_KEY_PATH_STORAGE, "tonelab-apikey.json (" + t("apiKeyPathDefault") + ")");
+        return Promise.resolve();
+      }
+      handlePromise = window.showSaveFilePicker(opts);
+    } else {
+      handlePromise = Promise.resolve(savedFileHandle);
+    }
+    return handlePromise.then(function (handle) {
+      savedFileHandle = handle;
+      var pathDisplay = handle.name;
+      localStorage.setItem(API_KEY_PATH_STORAGE, pathDisplay);
+      localStorage.setItem(API_KEY_SAVE_PREF, "true");
+      apiKeyPathValue.textContent = pathDisplay;
+      // Persist handle to IndexedDB for auto-load on next visit
+      saveHandleToIDB(handle).catch(function () {});
+      return handle.createWritable();
+    }).then(function (writable) {
+      return writable.write(JSON.stringify({ apiKey: key })).then(function () {
+        return writable.close();
+      });
+    });
+  }
+
+  // Load key from a local file via File System Access API
+  function loadKeyFromFile() {
+    var opts = {
+      types: [{ description: "API Key file", accept: { "application/json": [".json"] } }],
+      multiple: false
+    };
+    if (!window.showOpenFilePicker) {
+      // Fallback: use file input
+      var input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".json";
+      input.addEventListener("change", function () {
+        if (!input.files.length) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+          try {
+            var data = JSON.parse(reader.result);
+            if (data.apiKey) {
+              apiKeyInput.value = data.apiKey;
+              localStorage.setItem(API_KEY_PATH_STORAGE, input.files[0].name);
+              apiKeyPathValue.textContent = input.files[0].name;
+            }
+          } catch (e) {
+            alert(t("apiKeyLoadError", { msg: e.message }));
+          }
+        };
+        reader.readAsText(input.files[0]);
+      });
+      input.click();
+      return;
+    }
+    window.showOpenFilePicker(opts).then(function (handles) {
+      var handle = handles[0];
+      savedFileHandle = handle;
+      var pathDisplay = handle.name;
+      localStorage.setItem(API_KEY_PATH_STORAGE, pathDisplay);
+      apiKeyPathValue.textContent = pathDisplay;
+      // Persist handle for auto-load on next visit
+      saveHandleToIDB(handle).catch(function () {});
+      return handle.getFile();
+    }).then(function (file) {
+      return file.text();
+    }).then(function (text) {
+      var data = JSON.parse(text);
+      if (data.apiKey) {
+        apiKeyInput.value = data.apiKey;
+      }
+    }).catch(function (e) {
+      if (e.name !== "AbortError") {
+        alert(t("apiKeyLoadError", { msg: e.message }));
+      }
+    });
+  }
+
+  apiKeyLoadBtn.addEventListener("click", loadKeyFromFile);
+
+  apiKeyPathChange.addEventListener("click", function () {
+    if (currentApiKey) {
+      saveKeyToFile(currentApiKey, true).catch(function () {});
+    } else {
+      // Just let user pick a location for future saves
+      if (window.showSaveFilePicker) {
+        var opts = {
+          types: [{ description: "API Key file", accept: { "application/json": [".json"] } }],
+          suggestedName: "tonelab-apikey.json"
+        };
+        window.showSaveFilePicker(opts).then(function (handle) {
+          savedFileHandle = handle;
+          localStorage.setItem(API_KEY_PATH_STORAGE, handle.name);
+          apiKeyPathValue.textContent = handle.name;
+          saveHandleToIDB(handle).catch(function () {});
+        }).catch(function () {});
+      }
+    }
+  });
+
+  apiKeyConfirm.addEventListener("click", function () {
+    currentApiKey = (apiKeyInput.value || "").trim();
+    if (apiKeySaveCheck.checked && currentApiKey) {
+      saveKeyToFile(currentApiKey, false).catch(function (e) {
+        if (e.name !== "AbortError") {
+          alert(t("apiKeySaveError", { msg: e.message }));
+        }
+      });
+    } else if (!apiKeySaveCheck.checked) {
+      savedFileHandle = null;
+      clearHandleFromIDB().catch(function () {});
+    }
+    localStorage.setItem(API_KEY_SAVE_PREF, apiKeySaveCheck.checked ? "true" : "false");
+    updateApiKeyBtnState();
+    closeApiKeyModal();
+  });
+
+  apiKeyCancel.addEventListener("click", closeApiKeyModal);
+
+  // Close modal on overlay click
+  apiKeyModal.addEventListener("click", function (e) {
+    if (e.target === apiKeyModal) closeApiKeyModal();
+  });
+
+  // Close modal on Escape
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !apiKeyModal.classList.contains("hidden")) {
+      closeApiKeyModal();
+    }
+  });
+
+  // On page load: try to auto-load key from saved file handle in IndexedDB
+  (function initApiKey() {
+    updateApiKeyBtnState();
+    updateApiKeyModalText();
+    if (localStorage.getItem(API_KEY_SAVE_PREF) !== "true") return;
+    loadHandleFromIDB().then(function (handle) {
+      if (!handle) return;
+      savedFileHandle = handle;
+      // Request permission then read file
+      return handle.queryPermission({ mode: "read" }).then(function (perm) {
+        if (perm === "granted") return handle.getFile();
+        return handle.requestPermission({ mode: "read" }).then(function (p) {
+          if (p === "granted") return handle.getFile();
+          return null;
+        });
+      });
+    }).then(function (file) {
+      if (!file) return;
+      return file.text();
+    }).then(function (text) {
+      if (!text) return;
+      try {
+        var data = JSON.parse(text);
+        if (data.apiKey) {
+          currentApiKey = data.apiKey;
+          updateApiKeyBtnState();
+        }
+      } catch (e) { /* ignore parse errors */ }
+    }).catch(function () { /* silently fail — user can enter key manually */ });
+  })();
+
+  // --- AI Recolor ---
+
+  var GEMINI_PRO_MODEL = "gemini-3.1-pro-preview";
+  var NANO_BANANA_MODEL = "gemini-3.1-flash-image-preview";
+  var GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
+
+  function getApiKey() {
+    return currentApiKey;
+  }
+
+  function canvasToBase64Jpeg(canvas) {
+    var dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    return dataUrl.split(",")[1];
+  }
+
+  function canvasToGrayscaleBase64(srcCanvas) {
+    var w = srcCanvas.width;
+    var h = srcCanvas.height;
+    var tmpCanvas = document.createElement("canvas");
+    tmpCanvas.width = w;
+    tmpCanvas.height = h;
+    var ctx = tmpCanvas.getContext("2d");
+    ctx.drawImage(srcCanvas, 0, 0);
+    var imgData = ctx.getImageData(0, 0, w, h);
+    var d = imgData.data;
+    for (var i = 0; i < d.length; i += 4) {
+      var gray = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+      d[i] = gray;
+      d[i + 1] = gray;
+      d[i + 2] = gray;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return tmpCanvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+  }
+
+  function callGeminiApi(model, contents, config) {
+    var apiKey = getApiKey();
+    var url = GEMINI_API_BASE + model + ":generateContent?key=" + encodeURIComponent(apiKey);
+    var body = { contents: contents };
+    if (config) body.generationConfig = config;
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.json().then(function (err) {
+          throw new Error((err.error && err.error.message) || ("HTTP " + res.status));
+        });
+      }
+      return res.json();
+    });
+  }
+
+  function aiAnalyzeImage(base64Jpeg) {
+    var prompt =
+      "You are a professional color grading expert. Analyze this image and describe:\n" +
+      "1. The main subject and composition elements\n" +
+      "2. The current color palette and mood\n" +
+      "3. The lighting conditions and color temperature\n" +
+      "Keep your analysis concise (under 200 words). Focus on elements relevant to recoloring.";
+
+    var contents = [{
+      parts: [
+        { text: prompt },
+        { inline_data: { mime_type: "image/jpeg", data: base64Jpeg } }
+      ]
+    }];
+
+    return callGeminiApi(GEMINI_PRO_MODEL, contents).then(function (resp) {
+      var parts = resp.candidates && resp.candidates[0] && resp.candidates[0].content && resp.candidates[0].content.parts;
+      if (!parts || !parts.length) throw new Error("No analysis returned");
+      var text = "";
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].text) text += parts[i].text;
+      }
+      return text;
+    });
+  }
+
+  function buildPaletteMappingText(scheme) {
+    var orig = scheme.originalPalette || [];
+    var target = scheme.newPalette || [];
+    var lines = [];
+    var count = Math.min(orig.length, target.length);
+    for (var i = 0; i < count; i++) {
+      var o = orig[i].rgb;
+      var n = target[i].rgb;
+      lines.push(
+        "  RGB(" + o[0] + "," + o[1] + "," + o[2] + ") -> " +
+        "RGB(" + n[0] + "," + n[1] + "," + n[2] + ")"
+      );
+    }
+    return lines.join("\n");
+  }
+
+  function aiRecolorImage(base64Jpeg, analysis, schemeName, scheme) {
+    // Get the detailed scheme description from lang keys
+    var schemeDesc = t("recolorTip." + scheme.key) || "";
+
+    // Build the concrete palette mapping from the programmatic engine
+    var paletteMapping = buildPaletteMappingText(scheme);
+
+    var prompt =
+      "You are a professional colorist. Here is an analysis of this image:\n\n" +
+      analysis + "\n\n" +
+      "RECOLOR TASK: Apply a \"" + schemeName + "\" color scheme to this image.\n" +
+      "IMPORTANT: The attached image has been intentionally converted to GRAYSCALE to give you full creative control over coloring. Use the luminance/brightness information to guide where to place colors.\n\n" +
+      "SCHEME DESCRIPTION:\n" + schemeDesc + "\n\n" +
+      "TARGET COLOR PALETTE (apply these colors based on brightness zones):\n" +
+      paletteMapping + "\n\n" +
+      "INSTRUCTIONS:\n" +
+      "- Colorize this grayscale image using ONLY the target colors from the palette above\n" +
+      "- Map darker regions to the darker target colors, brighter regions to the brighter target colors\n" +
+      "- Preserve the exact luminance/brightness relationships between regions\n" +
+      "- Keep the EXACT same composition, subjects, structure, and level of detail\n" +
+      "- The result should look like a professional color grade with vivid, intentional colors\n" +
+      "Return ONLY the recolored image.";
+
+    var contents = [{
+      parts: [
+        { text: prompt },
+        { inline_data: { mime_type: "image/jpeg", data: base64Jpeg } }
+      ]
+    }];
+
+    var config = {
+      responseModalities: ["TEXT", "IMAGE"]
+    };
+
+    return callGeminiApi(NANO_BANANA_MODEL, contents, config).then(function (resp) {
+      var parts = resp.candidates && resp.candidates[0] && resp.candidates[0].content && resp.candidates[0].content.parts;
+      if (!parts) throw new Error("No response from image model");
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].inlineData && parts[i].inlineData.data) {
+          return parts[i].inlineData;
+        }
+        if (parts[i].inline_data && parts[i].inline_data.data) {
+          return parts[i].inline_data;
+        }
+      }
+      throw new Error("No image returned from AI model");
+    });
+  }
+
+  function loadBase64Image(mimeType, base64Data) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { reject(new Error("Failed to decode AI image")); };
+      img.src = "data:" + mimeType + ";base64," + base64Data;
+    });
+  }
+
+  var aiRecolorBtn = $("#ai-recolor-btn");
+
+  aiRecolorBtn.addEventListener("click", function () {
+    if (!recolorImageData || !recolorSchemes) return;
+
+    var apiKey = getApiKey();
+    if (!apiKey) {
+      openApiKeyModal();
+      return;
+    }
+
+    var scheme = recolorSchemes[recolorCurrentIndex];
+    var schemeName = t("recolor." + scheme.key);
+
+    aiRecolorBtn.classList.add("loading");
+    aiRecolorBtn.textContent = "...";
+    processingText.textContent = t("aiRecolorAnalyzing");
+    showProcessing(true);
+
+    // Get the original image as base64 from the recolor original canvas
+    var origCanvas = $("#recolor-original-canvas");
+    var base64Jpeg = canvasToBase64Jpeg(origCanvas);
+
+    // Create grayscale version for Nano Banana 2 (removes original color interference)
+    var grayBase64 = canvasToGrayscaleBase64(origCanvas);
+
+    // Step 1: Analyze with Gemini 3.1 Pro (use COLOR original for accurate analysis)
+    aiAnalyzeImage(base64Jpeg)
+      .then(function (analysis) {
+        processingText.textContent = t("aiRecolorGenerating");
+        // Step 2: Recolor with Nano Banana 2 (use GRAYSCALE to avoid color interference)
+        return aiRecolorImage(grayBase64, analysis, schemeName, scheme);
+      })
+      .then(function (imageData) {
+        // Step 3: Load the returned image and display it
+        return loadBase64Image(imageData.mimeType || imageData.mime_type || "image/png", imageData.data);
+      })
+      .then(function (img) {
+        // Draw AI result onto the comparison overlay canvas
+        var aiCanvas = $("#recolor-ai-canvas");
+        var rAdjCanvas = $("#recolor-adjusted-canvas");
+        var w = rAdjCanvas.width;
+        var h = rAdjCanvas.height;
+        aiCanvas.width = w;
+        aiCanvas.height = h;
+        var aiCtx = aiCanvas.getContext("2d");
+        aiCtx.drawImage(img, 0, 0, w, h);
+
+        // Cache the raw AI result and auto-correct for current mode
+        var cachedIdx = recolorCurrentIndex;
+        var aiRawData = aiCtx.getImageData(0, 0, w, h);
+        aiRawCache[cachedIdx] = aiRawData;
+        var correctedData = correctAiForCurrentMode(cachedIdx);
+        aiCtx.putImageData(correctedData, 0, 0);
+        aiComparePositions[cachedIdx] = 0.5;
+
+        // Show comparison slider at 50%
+        showAiCompare(true);
+        setAiComparePosition(0.5);
+
+        // Update header to indicate AI result
+        var nameEl = $("#recolor-scheme-name");
+        nameEl.textContent = t("aiRecolorSchemeLabel", { scheme: schemeName });
+
+        showProcessing(false);
+        aiRecolorBtn.classList.remove("loading");
+        aiRecolorBtn.textContent = t("aiRecolorBtn");
+      })
+      .catch(function (err) {
+        showProcessing(false);
+        aiRecolorBtn.classList.remove("loading");
+        aiRecolorBtn.textContent = t("aiRecolorBtn");
+        alert(t("aiRecolorError", { msg: err.message || String(err) }));
+      });
+  });
+
+  // --- AI Compare Slider ---
+
+  var aiCompareContainer = $("#ai-compare-container");
+  var aiCompareDivider = $("#ai-compare-divider");
+  var aiCompareActive = false;
+  var aiRawCache = {};            // schemeIndex → ImageData (raw AI result before auto-correction)
+  var aiResultCache = {};         // schemeIndex → ImageData (corrected AI result for display)
+  var aiComparePositions = {};    // schemeIndex → last slider fraction
+
+  function showAiCompare(show) {
+    aiCompareContainer.classList.toggle("hidden", !show);
+    aiCompareActive = show;
+  }
+
+  // Re-correct a raw AI result with the current mode's parameters
+  function correctAiForCurrentMode(schemeIdx) {
+    var raw = aiRawCache[schemeIdx];
+    if (!raw) return null;
+    var corrected = autoCorrectRecolored(raw, currentMode);
+    aiResultCache[schemeIdx] = corrected.corrected;
+    return corrected.corrected;
+  }
+
+  // Re-correct ALL cached raw AI results for the current mode
+  function correctAllAiForCurrentMode() {
+    for (var idx in aiRawCache) {
+      if (aiRawCache.hasOwnProperty(idx)) {
+        correctAiForCurrentMode(parseInt(idx, 10));
+      }
+    }
+  }
+
+  function resetAiCache() {
+    aiRawCache = {};
+    aiResultCache = {};
+    aiComparePositions = {};
+    showAiCompare(false);
+  }
+
+  function setAiComparePosition(fraction) {
+    // fraction: 0 = all programmatic, 1 = all AI
+    fraction = Math.max(0, Math.min(1, fraction));
+    var pct = fraction * 100;
+    var aiCanvas = $("#recolor-ai-canvas");
+    // clip-path: inset(top right bottom left) — reveal right side from divider
+    aiCanvas.style.clipPath = "inset(0 0 0 " + pct + "%)";
+    aiCanvas.style.webkitClipPath = "inset(0 0 0 " + pct + "%)";
+    aiCompareDivider.style.left = pct + "%";
+
+    // Remember position for this scheme
+    if (recolorCurrentIndex != null) {
+      aiComparePositions[recolorCurrentIndex] = fraction;
+    }
+
+    // Update labels
+    var leftLabel = $(".ai-compare-label-left");
+    var rightLabel = $(".ai-compare-label-right");
+    if (leftLabel) leftLabel.style.display = pct < 8 ? "none" : "";
+    if (rightLabel) rightLabel.style.display = pct > 92 ? "none" : "";
+  }
+
+  (function () {
+    var dragging = false;
+
+    function getPosFraction(e) {
+      var rect = aiCompareContainer.getBoundingClientRect();
+      var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+      return x / rect.width;
+    }
+
+    aiCompareContainer.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      dragging = true;
+      setAiComparePosition(getPosFraction(e));
+    });
+
+    aiCompareContainer.addEventListener("touchstart", function (e) {
+      dragging = true;
+      setAiComparePosition(getPosFraction(e));
+    }, { passive: true });
+
+    document.addEventListener("mousemove", function (e) {
+      if (!dragging) return;
+      setAiComparePosition(getPosFraction(e));
+    });
+
+    document.addEventListener("touchmove", function (e) {
+      if (!dragging) return;
+      setAiComparePosition(getPosFraction(e));
+    }, { passive: true });
+
+    document.addEventListener("mouseup", function () { dragging = false; });
+    document.addEventListener("touchend", function () { dragging = false; });
+  })();
+
+  // Show/hide AI compare per scheme — restore cached AI result if available
+  var origRenderRecolorScheme = renderRecolorScheme;
+  renderRecolorScheme = function (idx) {
+    // Switch the programmatic scheme
+    origRenderRecolorScheme(idx);
+    // Restore or hide AI compare for the new scheme
+    if (aiRawCache[idx]) {
+      // Re-correct for current mode if needed
+      if (!aiResultCache[idx]) correctAiForCurrentMode(idx);
+      var aiCanvas = $("#recolor-ai-canvas");
+      var rAdjCanvas = $("#recolor-adjusted-canvas");
+      aiCanvas.width = rAdjCanvas.width;
+      aiCanvas.height = rAdjCanvas.height;
+      aiCanvas.getContext("2d").putImageData(aiResultCache[idx], 0, 0);
+      showAiCompare(true);
+      setAiComparePosition(aiComparePositions[idx] != null ? aiComparePositions[idx] : 0.5);
+      // Update header label
+      var scheme = recolorSchemes[idx];
+      var schemeName = t("recolor." + scheme.key);
+      $("#recolor-scheme-name").textContent = t("aiRecolorSchemeLabel", { scheme: schemeName });
+    } else {
+      showAiCompare(false);
+    }
+  };
 
   // --- Init ---
 
