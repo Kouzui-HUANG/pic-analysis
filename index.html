@@ -4,34 +4,51 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ToneLab</title>
-  <link rel="stylesheet" href="css/style.css?v=13">
+  <link rel="stylesheet" href="css/style.css?v=16">
 </head>
 <body>
 
   <header>
     <h1 id="app-title">調色研究所</h1>
     <div class="header-actions">
-      <button id="api-key-btn" class="api-key-btn" type="button">API Key</button>
-      <div class="mode-toggle" id="mode-toggle">
+      <button id="api-key-btn" class="api-key-btn hidden" type="button">API Key</button>
+      <div class="mode-toggle hidden" id="mode-toggle">
         <button id="mode-photo" class="mode-btn active">攝影</button>
         <button id="mode-illustration" class="mode-btn">電繪</button>
       </div>
       <button id="lang-btn">EN</button>
       <button id="back-btn" class="hidden">返回</button>
       <button id="upload-btn" class="hidden">上傳新圖</button>
-      <button id="reset-btn">重設參數</button>
-      <button id="download-btn">下載</button>
+      <button id="reset-btn" class="hidden">重設參數</button>
+      <button id="download-btn" class="hidden">下載</button>
     </div>
   </header>
 
   <!-- Dual-entry landing -->
   <div id="landing" class="landing">
+    <div id="drop-zone-recolor" class="drop-zone-card" data-mode="recolor">
+      <div class="drop-card-header">
+        <span class="drop-card-icon">🎨</span>
+        <h2 id="landing-recolor-title" class="drop-card-title">配色方案引擎</h2>
+      </div>
+      <p id="landing-recolor-desc" class="drop-card-desc">從圖片生成 8 種經典配色方案，可選用 AI 配色（需 API Key）</p>
+      <div class="drop-card-features">
+        <span id="landing-recolor-f1">8 種配色方案</span>
+        <span id="landing-recolor-f2">AI 配色（可選）</span>
+        <span id="landing-recolor-f3">即時預覽切換</span>
+      </div>
+      <div class="drop-card-action">
+        <p id="drop-text-recolor">拖放圖片至此處，或點擊上傳</p>
+        <p class="drop-hint" id="drop-hint-recolor">支援 JPG、PNG、WebP</p>
+      </div>
+    </div>
+
     <div id="drop-zone" class="drop-zone-card" data-mode="tonelab">
       <div class="drop-card-header">
         <span class="drop-card-icon">🔬</span>
-        <h2 id="landing-tone-title" class="drop-card-title">智慧調色分析</h2>
+        <h2 id="landing-tone-title" class="drop-card-title">影像診斷與調色</h2>
       </div>
-      <p id="landing-tone-desc" class="drop-card-desc">自動分析亮度、色溫、飽和度等特徵，偵測場景風格並給出調整建議</p>
+      <p id="landing-tone-desc" class="drop-card-desc">分析亮度、對比度、飽和度、色溫等特徵，偵測場景風格，手動微調 32 項參數</p>
       <div class="drop-card-features">
         <span id="landing-tone-f1">10+ 項診斷指標</span>
         <span id="landing-tone-f2">14 種場景偵測</span>
@@ -40,23 +57,6 @@
       <div class="drop-card-action">
         <p id="drop-text">拖放圖片至此處，或點擊上傳</p>
         <p id="drop-hint" class="drop-hint">支援 JPG、PNG、WebP</p>
-      </div>
-    </div>
-
-    <div id="drop-zone-recolor" class="drop-zone-card" data-mode="recolor">
-      <div class="drop-card-header">
-        <span class="drop-card-icon">🎨</span>
-        <h2 id="landing-recolor-title" class="drop-card-title">自動重新配色</h2>
-      </div>
-      <p id="landing-recolor-desc" class="drop-card-desc">針對圖片中的局部色彩進行智慧重新配色，自動產生多種經典配色方案</p>
-      <div class="drop-card-features">
-        <span id="landing-recolor-f1">8 種配色方案</span>
-        <span id="landing-recolor-f2">局部精準調色</span>
-        <span id="landing-recolor-f3">即時預覽切換</span>
-      </div>
-      <div class="drop-card-action">
-        <p id="drop-text-recolor">拖放圖片至此處，或點擊上傳</p>
-        <p class="drop-hint" id="drop-hint-recolor">支援 JPG、PNG、WebP</p>
       </div>
     </div>
   </div>
@@ -168,10 +168,55 @@
                 <span class="ai-compare-arrow">&rsaquo;</span>
               </div>
             </div>
-            <span class="ai-compare-label ai-compare-label-left">Programmatic</span>
-            <span class="ai-compare-label ai-compare-label-right">AI</span>
+            <span class="ai-compare-label ai-compare-label-left" id="ai-compare-label-left">演算法</span>
+            <span class="ai-compare-label ai-compare-label-right" id="ai-compare-label-right">AI</span>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Palette comparison -->
+    <div class="section-title" id="recolor-title-palette">配色對照</div>
+    <div class="recolor-palette-comparison">
+      <div class="recolor-palette-group">
+        <span class="diag-label" id="recolor-palette-orig-label">原始色盤</span>
+        <div id="recolor-palette-original" class="color-swatches"></div>
+      </div>
+      <div class="recolor-palette-arrow">→</div>
+      <div class="recolor-palette-group">
+        <span class="diag-label" id="recolor-palette-new-label">新色盤</span>
+        <div id="recolor-palette-new" class="color-swatches"></div>
+      </div>
+      <div class="recolor-palette-alts">
+        <span class="diag-label recolor-alt-heading" id="recolor-alt-label">備選方案</span>
+        <div class="recolor-alt-row" id="recolor-alt-a" style="display:none;">
+          <button class="recolor-alt-btn" id="recolor-alt-a-btn" type="button">
+            <span class="recolor-alt-hue-dot" id="recolor-alt-a-dot"></span>
+            <span class="recolor-alt-name" id="recolor-alt-a-name"></span>
+            <div class="color-swatches recolor-alt-swatches" id="recolor-alt-a-swatches"></div>
+          </button>
+        </div>
+        <div class="recolor-alt-row" id="recolor-alt-b" style="display:none;">
+          <button class="recolor-alt-btn" id="recolor-alt-b-btn" type="button">
+            <span class="recolor-alt-hue-dot" id="recolor-alt-b-dot"></span>
+            <span class="recolor-alt-name" id="recolor-alt-b-name"></span>
+            <div class="color-swatches recolor-alt-swatches" id="recolor-alt-b-swatches"></div>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detected character colors (skin & hair) -->
+    <div id="recolor-char-colors" class="recolor-char-colors" style="display:none;">
+      <div class="recolor-char-color-row" id="recolor-skin-color-row" style="display:none;">
+        <span class="diag-label" id="recolor-skin-color-label">膚色</span>
+        <div class="recolor-char-swatch" id="recolor-skin-swatch"></div>
+        <span class="recolor-char-rgb" id="recolor-skin-rgb"></span>
+      </div>
+      <div class="recolor-char-color-row" id="recolor-hair-color-row" style="display:none;">
+        <span class="diag-label" id="recolor-hair-color-label">髮色</span>
+        <div class="recolor-char-swatch" id="recolor-hair-swatch"></div>
+        <span class="recolor-char-rgb" id="recolor-hair-rgb"></span>
       </div>
     </div>
 
@@ -214,44 +259,37 @@
       </div>
     </div>
 
-    <!-- Palette comparison -->
-    <div class="section-title" id="recolor-title-palette">配色對照</div>
-    <div class="recolor-palette-comparison">
-      <div class="recolor-palette-group">
-        <span class="diag-label" id="recolor-palette-orig-label">原始色盤</span>
-        <div id="recolor-palette-original" class="color-swatches"></div>
-      </div>
-      <div class="recolor-palette-arrow">→</div>
-      <div class="recolor-palette-group">
-        <span class="diag-label" id="recolor-palette-new-label">新色盤</span>
-        <div id="recolor-palette-new" class="color-swatches"></div>
-      </div>
-    </div>
-
     <!-- Scheme selector dots -->
     <div class="section-title" id="recolor-title-schemes">所有配色方案</div>
     <div id="recolor-schemes-panel" class="recolor-schemes-row"></div>
 
-    <!-- Scene Detection (from original image) -->
-    <div class="section-title" id="recolor-title-scenes">偵測到的場景風格</div>
-    <div id="recolor-scenes-panel" class="scenes-row"></div>
+    <!-- Collapsible advanced analysis -->
+    <button id="recolor-analysis-toggle" class="recolor-analysis-toggle" type="button">
+      <span id="recolor-analysis-toggle-text">進階分析</span>
+      <span class="recolor-analysis-toggle-arrow">&#9660;</span>
+    </button>
+    <div id="recolor-analysis-collapsible" class="recolor-analysis-collapsible collapsed">
+      <!-- Scene Detection (from original image) -->
+      <div class="section-title" id="recolor-title-scenes">偵測到的場景風格</div>
+      <div id="recolor-scenes-panel" class="scenes-row"></div>
 
-    <!-- Diagnosis (original vs auto-corrected) -->
-    <div class="section-title" id="recolor-title-diagnosis">診斷結果</div>
-    <div class="diagnosis-panels">
-      <div class="diagnosis-column">
-        <h3 class="diag-column-title" id="recolor-diag-title-original">原圖</h3>
-        <div id="recolor-diagnosis-panel"></div>
+      <!-- Diagnosis (original vs auto-corrected) -->
+      <div class="section-title" id="recolor-title-diagnosis">診斷結果</div>
+      <div class="diagnosis-panels">
+        <div class="diagnosis-column">
+          <h3 class="diag-column-title" id="recolor-diag-title-original">原圖</h3>
+          <div id="recolor-diagnosis-panel"></div>
+        </div>
+        <div class="diagnosis-column">
+          <h3 class="diag-column-title" id="recolor-diag-title-adjusted">校正後</h3>
+          <div id="recolor-diagnosis-panel-adjusted"></div>
+        </div>
       </div>
-      <div class="diagnosis-column">
-        <h3 class="diag-column-title" id="recolor-diag-title-adjusted">校正後</h3>
-        <div id="recolor-diagnosis-panel-adjusted"></div>
-      </div>
+
+      <!-- Active auto-correction adjustments -->
+      <div class="section-title" id="recolor-title-adjustments">自動校正項目</div>
+      <div id="recolor-adjustments-panel"></div>
     </div>
-
-    <!-- Active auto-correction adjustments -->
-    <div class="section-title" id="recolor-title-adjustments">自動校正項目</div>
-    <div id="recolor-adjustments-panel"></div>
   </div>
 
   <!-- API Key Modal -->
@@ -284,12 +322,12 @@
   <!-- Scripts: loaded in dependency order -->
   <script src="js/color.js?v=13"></script>
   <script src="js/stats.js?v=13"></script>
-  <script src="js/lang.js?v=13"></script>
+  <script src="js/lang.js?v=17"></script>
   <script src="js/analyzer.js?v=13"></script>
   <script src="js/scene.js?v=13"></script>
   <script src="js/strategy.js?v=13"></script>
   <script src="js/adjuster.js?v=13"></script>
-  <script src="js/recolor.js?v=16"></script>
-  <script src="js/main.js?v=13"></script>
+  <script src="js/recolor.js?v=18"></script>
+  <script src="js/main.js?v=16"></script>
 </body>
 </html>

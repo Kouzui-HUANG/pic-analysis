@@ -32,7 +32,7 @@ Mode is stored as `currentMode` in main.js. `Strategy.route()` accepts mode as 4
 | Strategy | `js/strategy.js` | Stage 2 | Diagnosis + Scene[] + params + mode → Adjustment[] |
 | Adjuster | `js/adjuster.js` | Stage 3 | ImageData + Adjustment[] → adjusted ImageData |
 | Lang | `js/lang.js` | UI | i18n, EN + zh-Hant |
-| Main | `js/main.js` | UI/Orchestration | Pipeline coordination, DOM binding, presets, mode toggle |
+| Main | `js/main.js` | UI/Orchestration | Pipeline coordination, DOM binding, presets, mode toggle, pipeline cache, character color detection, alt palettes, AI recolor |
 
 ---
 
@@ -51,6 +51,30 @@ colorHarmony: { type, typeKey, score, hues[] }
   types: neutral / monochromatic / analogous / complementary /
          splitComplementary / triadic / tetradic / diverse
 ```
+
+---
+
+## 9 Color Schemes (Recolor Engine)
+
+| Key | Description |
+|-----|-------------|
+| `noRecolor` | Identity (no hue remapping) — only auto-correction pipeline applies |
+| `monochromatic` | All pixels mapped to single hue |
+| `analogous` | Compress hue spread to ~60° around base hue |
+| `complementary` | Base + opposite hue (180°), luminance-split |
+| `splitComplementary` | Base + two offset hues (±150°/210°) |
+| `triadic` | Three 120°-spaced hues |
+| `warmShift` | Push all hues toward warm (30°) |
+| `coolShift` | Push all hues toward cool (210°) |
+| `hueRotate` | Full 180° hue flip |
+
+### Variant Generation
+`generateVariants(schemeKey, palette, hue, medianL)` returns 2 alternatives at +120° and +240° of current hue. Not available for: noRecolor, warmShift, coolShift, hueRotate.
+
+### New Exports
+- `skinScore(hue, sat, lum)` — skin confidence score (0–1)
+- `paletteMedianL(palette)` — palette median luminance
+- `generateVariants(...)` — alternative hue variants
 
 ---
 
@@ -194,6 +218,31 @@ Stored in localStorage via 5 named preset slots.
 
 ---
 
+## Pipeline Cache (main.js)
+
+After running the ToneLab pipeline, main.js caches the result in `pipelineCache[mode]` and uses `setTimeout(0)` to pre-compute the OTHER mode's Stage 2+3 in the background. On mode switch, if cache exists, results render instantly without recomputation.
+
+State: `pipelineCache = {}; // mode → { adjustments, resultData, adjustedDiagnosis }`
+
+Cache is invalidated (cleared) when a new image is uploaded or params change.
+
+---
+
+## Character Color Detection (main.js)
+
+- **Skin**: `extractCharacterColors(canvas)` subsamples ~5000 pixels, computes weighted average of pixels with `Recolor.skinScore > 0.3`
+- **Hair**: Detected by Gemini Vision during AI recolor (`aiAnalyzeImage` sends palette, Gemini returns `HAIR_COLOR_INDEX`)
+- State: `recolorCharColors = { skin: [R,G,B] | null, hair: [R,G,B] | null }`
+- Both are passed to `aiRecolorImage()` as CRITICAL preservation instructions
+
+---
+
+## Collapsible Advanced Analysis (Recolor UI)
+
+Scene detection, diagnosis panels, and auto-correction adjustments are wrapped in a collapsible section (`#recolor-analysis-collapsible`), defaulting to collapsed state. Toggle via `#recolor-analysis-toggle` button.
+
+---
+
 ## Key Design Constraints (Must-Know Before Modifying)
 
 1. **No external dependencies** — vanilla JS ES5, no build step, no npm
@@ -209,3 +258,8 @@ Stored in localStorage via 5 named preset slots.
 11. **Dual-mode direction flip** — in illustration mode, `route()` inverts direction for brightness, whiteBalance, and tintCorrection. Same detection, opposite action.
 12. **Two scene modifier tables** — `SCENE_MODIFIERS` (photo, suppress-only) and `ILLUSTRATION_SCENE_MODIFIERS` (enhance+suppress). Selected by mode in `route()`.
 13. **Mode switch resets params** — `setMode()` calls `defaultParams(mode)` then reruns pipeline. Mode does NOT affect Stage 1 or 1.5 (same diagnosis, same scene detection).
+14. **Pipeline cache** — after running ToneLab pipeline, other mode's Stage 2+3 is pre-computed in background. Mode switch uses cached results if available, otherwise reruns.
+15. **9 recolor schemes** — includes `noRecolor` identity scheme (index 0) that applies no hue remapping, only auto-correction.
+16. **Landing page order** — Recolor card is left (first), ToneLab card is right (second).
+17. **Character colors** — skin detected locally via pixel analysis; hair detected by Gemini via `HAIR_COLOR_INDEX` in palette. Both sent to AI recolor prompt for exact preservation.
+18. **Recolor analysis is collapsible** — scenes, diagnosis, adjustments panels are in a `.collapsed` div by default in recolor workspace.

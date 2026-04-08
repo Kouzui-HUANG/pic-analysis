@@ -11,7 +11,8 @@ Map keywords in the modification request to the source files that must be read.
 | RGB, HSL, LAB, luminance formula, color conversion, clamp | `js/color.js` |
 | mean, std, standard deviation, skewness, percentile, k-means, kMeans, histogram bins | `js/stats.js` |
 | translation, i18n, language, Chinese, English, lang key, t(), locale | `js/lang.js` |
-| UI, upload, drag, canvas, download, preset, slider, histogram render, pipeline trigger, DOM, localStorage, mode toggle, setMode | `js/main.js` |
+| recolor, scheme, palette, skin, hue rotate, monochromatic, analogous, complementary, triadic, warm shift, cool shift, noRecolor, variant, alternative, skinScore | `js/recolor.js` |
+| UI, upload, drag, canvas, download, preset, slider, histogram render, pipeline trigger, DOM, localStorage, mode toggle, setMode, pipeline cache, character color, hair, AI recolor, Gemini, compare, collapsible, advanced analysis | `js/main.js` |
 
 ## Multi-Module Rules
 
@@ -28,6 +29,12 @@ When a request spans multiple concerns, read **all** implicated modules:
 | Change statistical method | `stats.js` + `analyzer.js` |
 | Change mode behavior (photo/illustration) | `strategy.js` (OVERRIDES, SCENE_MODIFIERS, route direction flip) |
 | Add new processing mode | `strategy.js` + `main.js` + `lang.js` + `index.html` |
+| Add new recolor scheme | `recolor.js` + `main.js` + `lang.js` + `index.html` |
+| Change pipeline cache behavior | `main.js` (pipelineCache, _pipelineBgTimer) |
+| Change character color detection | `main.js` (extractCharacterColors, aiAnalyzeImage) + `recolor.js` (skinScore) |
+| Change AI recolor prompt/flow | `main.js` (aiAnalyzeImage, aiRecolorImage, formatCharacterColorsForPrompt) |
+| Change recolor variant generation | `recolor.js` (generateVariants, NO_VARIANTS) + `main.js` (renderAlternativePalettes, applyVariant) |
+| Change landing page layout | `index.html` + `css/style.css` + `lang.js` |
 
 ## Source File Base Path
 `/Users/kouzuimac/Documents/claude_code/pic-analysis/js/`

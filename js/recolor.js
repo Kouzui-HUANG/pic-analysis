@@ -119,12 +119,15 @@ PicAnalysis.Recolor = (function () {
   }
 
   function schemeAnalogous(palette, overrideHue) {
-    var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
+    var dominantHue = findDominantHue(palette);
+    var baseHue = overrideHue != null ? overrideHue : dominantHue;
     var spread = Math.max(findHueSpread(palette), 0.05);
     var targetSpread = 1 / 6;
+    var ratio = targetSpread / Math.max(spread, targetSpread);
     return makeScheme(function (h) {
-      var d = hueDist(baseHue, h);
-      var compressed = d * (targetSpread / Math.max(spread, targetSpread));
+      // Measure distance from original dominant hue, then re-center around baseHue
+      var d = hueDist(dominantHue, h);
+      var compressed = d * ratio;
       return ((baseHue + compressed) % 1 + 1) % 1;
     });
   }
@@ -205,7 +208,13 @@ PicAnalysis.Recolor = (function () {
     });
   }
 
+  // Identity scheme: no hue remapping — just passes through auto-correction
+  function schemeNoRecolor() {
+    return makeScheme(function (h) { return h; });
+  }
+
   var SCHEMES = [
+    { key: "noRecolor", fn: schemeNoRecolor },
     { key: "monochromatic", fn: schemeMonochromatic },
     { key: "analogous", fn: schemeAnalogous },
     { key: "complementary", fn: schemeComplementary },
@@ -427,12 +436,42 @@ PicAnalysis.Recolor = (function () {
     return findDominantHue(palette);
   }
 
+  // --- Generate hue variants for a scheme ---
+  // Returns 2 variants of the same scheme logic with different base hues,
+  // or null if the scheme doesn't support hue variants.
+
+  var NO_VARIANTS = { noRecolor: 1, warmShift: 1, coolShift: 1, hueRotate: 1 };
+
+  function generateVariants(schemeKey, originalPalette, currentHue, medianL) {
+    if (NO_VARIANTS[schemeKey]) return null;
+
+    var schemeDef = null;
+    for (var i = 0; i < SCHEMES.length; i++) {
+      if (SCHEMES[i].key === schemeKey) { schemeDef = SCHEMES[i]; break; }
+    }
+    if (!schemeDef) return null;
+
+    var hueA = (currentHue + 1 / 3) % 1; // +120°
+    var hueB = (currentHue + 2 / 3) % 1; // +240°
+
+    var schemeA = schemeDef.fn(originalPalette, hueA, medianL);
+    var schemeB = schemeDef.fn(originalPalette, hueB, medianL);
+
+    return [
+      { scheme: schemeA, newPalette: remapPalette(originalPalette, schemeA), hue: hueA },
+      { scheme: schemeB, newPalette: remapPalette(originalPalette, schemeB), hue: hueB }
+    ];
+  }
+
   return {
     extractPalette: extractPalette,
     generateSchemes: generateSchemes,
     applyScheme: applyScheme,
     blendWithOriginal: blendWithOriginal,
     getAutoHue: getAutoHue,
+    skinScore: skinScore,
+    paletteMedianL: paletteMedianL,
+    generateVariants: generateVariants,
     SCHEMES: SCHEMES
   };
 })();

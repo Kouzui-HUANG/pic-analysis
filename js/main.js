@@ -22,6 +22,8 @@
   var currentScenes = null;
   var currentMode = MODES.PHOTO;
   var params = Strategy.defaultParams(currentMode);
+  var pipelineCache = {}; // mode → { adjustments, resultData, adjustedDiagnosis }
+  var _pipelineBgTimer = null;
 
   // Recolor state
   var recolorImageData = null;
@@ -36,6 +38,7 @@
   var recolorHueDebounceTimer = null;
   var recolorSkinDebounceTimer = null;
   var recolorVibrance = 0; // -100 to 100
+  var recolorCharColors = null; // { skin: [R,G,B] | null, hair: [R,G,B] | null }
   var recolorVibranceDebounceTimer = null;
   var recolorDiagnosis = null;       // diagnosis of original recolor image
   var recolorScenes = null;          // scenes detected from original recolor image
@@ -80,10 +83,25 @@
     params = Strategy.defaultParams(mode);
     buildControls();
     if (activeFeature === "recolor" && recolorImageData) {
-      // Re-run auto-correction with new mode
-      rerunRecolorAutoCorrection();
+      // Defer heavy recolor re-correction so the button toggle renders first
+      showProcessing(true);
+      setTimeout(function () {
+        rerunRecolorAutoCorrection();
+        showProcessing(false);
+      }, 30);
     } else if (originalImageData) {
-      runPipeline();
+      // Use pre-computed cache for instant mode switching
+      if (pipelineCache[mode]) {
+        var cached = pipelineCache[mode];
+        currentAdjustments = cached.adjustments;
+        currentAdjustedDiagnosis = cached.adjustedDiagnosis;
+        renderAdjustments(currentAdjustments);
+        adjustedCtx.putImageData(cached.resultData, 0, 0);
+        renderDiagnosis(currentAdjustedDiagnosis, diagnosisPanelAdj);
+        renderAdjustedHistogram(currentAdjustedDiagnosis);
+      } else {
+        runPipeline();
+      }
     }
   }
 
@@ -147,6 +165,9 @@
     $("#recolor-title-palette").textContent = t("recolorPaletteComparison");
     $("#recolor-palette-orig-label").textContent = t("recolorOriginalPalette");
     $("#recolor-palette-new-label").textContent = t("recolorNewPalette");
+    $("#recolor-alt-label").textContent = t("recolorAltLabel");
+    $("#recolor-skin-color-label").textContent = t("recolorDetectedSkin");
+    $("#recolor-hair-color-label").textContent = t("recolorDetectedHair");
     $("#recolor-title-schemes").textContent = t("recolorAllSchemes");
     $("#recolor-title-scenes").textContent = t("recolorDetectedScenes");
     $("#recolor-title-diagnosis").textContent = t("recolorDiagnosis");
@@ -168,8 +189,21 @@
     // API key modal + AI button + compare labels
     updateApiKeyModalText();
     $("#ai-recolor-btn").textContent = t("aiRecolorBtn");
-    $(".ai-compare-label-left").textContent = t("aiCompareLabelLeft");
-    $(".ai-compare-label-right").textContent = t("aiCompareLabelRight");
+    $("#ai-compare-label-left").textContent = t("aiCompareLabelLeft");
+    $("#ai-compare-label-right").textContent = t("aiCompareLabelRight");
+
+    // Recolor analysis toggle
+    $("#recolor-analysis-toggle-text").textContent = t("recolorAdvancedAnalysis");
+
+    // Upload button context
+    if (activeFeature === "recolor") {
+      uploadBtn.textContent = t("uploadNewRecolor");
+    } else {
+      uploadBtn.textContent = t("uploadNew");
+    }
+
+    // Download button context
+    updateDownloadBtn();
 
     // Processing
     processingText.textContent = t("processing");
@@ -286,13 +320,17 @@
     activeFeature = feature;
     landing.classList.add("hidden");
     backBtn.classList.remove("hidden");
+    // Show shared controls
+    $("#mode-toggle").classList.remove("hidden");
+    downloadBtn.classList.remove("hidden");
     if (feature === "tonelab") {
       $(".workspace").classList.remove("hidden");
       $(".recolor-workspace").classList.add("hidden");
       uploadBtn.classList.remove("hidden");
-      // Show tonelab header controls
-      $("#mode-toggle").style.display = "";
-      resetBtn.style.display = "";
+      uploadBtn.textContent = t("uploadNew");
+      resetBtn.classList.remove("hidden");
+      apiKeyBtn.classList.add("hidden");
+      downloadBtn.textContent = t("download");
       downloadBtn.onclick = function () {
         var link = document.createElement("a");
         link.download = "adjusted.png";
@@ -303,9 +341,10 @@
       $(".workspace").classList.add("hidden");
       $(".recolor-workspace").classList.remove("hidden");
       uploadBtn.classList.remove("hidden");
-      // Show mode toggle (affects auto-correction), hide reset (no params in recolor)
-      $("#mode-toggle").style.display = "";
-      resetBtn.style.display = "none";
+      uploadBtn.textContent = t("uploadNewRecolor");
+      resetBtn.classList.add("hidden");
+      apiKeyBtn.classList.remove("hidden");
+      updateDownloadBtn();
       downloadBtn.onclick = function () {
         var link = document.createElement("a");
         if (aiResultCache[recolorCurrentIndex]) {
@@ -320,6 +359,15 @@
     }
   }
 
+  function updateDownloadBtn() {
+    if (activeFeature !== "recolor") return;
+    if (aiResultCache[recolorCurrentIndex]) {
+      downloadBtn.textContent = t("downloadAi");
+    } else {
+      downloadBtn.textContent = t("download");
+    }
+  }
+
   function backToLanding() {
     activeFeature = null;
     landing.classList.remove("hidden");
@@ -327,8 +375,11 @@
     $(".recolor-workspace").classList.add("hidden");
     uploadBtn.classList.add("hidden");
     backBtn.classList.add("hidden");
-    $("#mode-toggle").style.display = "";
-    resetBtn.style.display = "";
+    // Hide workspace-specific controls on landing
+    $("#mode-toggle").classList.add("hidden");
+    resetBtn.classList.add("hidden");
+    downloadBtn.classList.add("hidden");
+    apiKeyBtn.classList.add("hidden");
   }
 
   backBtn.addEventListener("click", backToLanding);
@@ -437,6 +488,7 @@
             recolorSchemes = Recolor.generateSchemes(recolorImageData);
             recolorResults = [];
             recolorCurrentIndex = 0;
+            recolorSchemeHues = [];
             var skinVal = recolorSkinProtect / 100;
             var vibVal = recolorVibrance / 100;
             for (var i = 0; i < recolorSchemes.length; i++) {
@@ -444,6 +496,11 @@
                 Recolor.applyScheme(recolorImageData, recolorSchemes[i].scheme, skinVal, vibVal)
               );
             }
+
+            // Extract and display character colors (skin & hair)
+            recolorCharColors = extractCharacterColors(rOrigCanvas);
+            renderCharacterColors(recolorCharColors);
+
             // Pre-compute auto-correction for all schemes (enables instant switching)
             buildRecolorCorrectionCache();
             renderRecolorScheme(0);
@@ -463,6 +520,7 @@
 
   function runPipeline() {
     showProcessing(true);
+    if (_pipelineBgTimer) { clearTimeout(_pipelineBgTimer); _pipelineBgTimer = null; }
 
     requestAnimationFrame(function () {
       setTimeout(function () {
@@ -487,6 +545,32 @@
         currentAdjustedDiagnosis = Analyzer.analyze(resultData);
         renderDiagnosis(currentAdjustedDiagnosis, diagnosisPanelAdj);
         renderAdjustedHistogram(currentAdjustedDiagnosis);
+
+        // Cache current mode result
+        pipelineCache = {};
+        pipelineCache[currentMode] = {
+          adjustments: currentAdjustments,
+          resultData: resultData,
+          adjustedDiagnosis: currentAdjustedDiagnosis,
+        };
+
+        // Pre-compute other mode in background (Stage 2+3 only — diagnosis/scenes are shared)
+        var otherMode = currentMode === MODES.PHOTO ? MODES.ILLUSTRATION : MODES.PHOTO;
+        var otherParams = Strategy.defaultParams(otherMode);
+        var diagSnap = currentDiagnosis;
+        var scenesSnap = currentScenes;
+        var imgSnap = originalImageData;
+        _pipelineBgTimer = setTimeout(function () {
+          _pipelineBgTimer = null;
+          var otherAdj = Strategy.route(diagSnap, otherParams, scenesSnap, otherMode);
+          var otherResult = Adjuster.adjust(imgSnap, otherAdj);
+          var otherAdjDiag = Analyzer.analyze(otherResult);
+          pipelineCache[otherMode] = {
+            adjustments: otherAdj,
+            resultData: otherResult,
+            adjustedDiagnosis: otherAdjDiag,
+          };
+        }, 0);
 
         showProcessing(false);
       }, 50);
@@ -1167,6 +1251,9 @@
     for (var i = 0; i < dots.length; i++) {
       dots[i].classList.toggle("active", i === idx);
     }
+
+    // Render alternative palette picks
+    renderAlternativePalettes(idx);
   }
 
   function renderPaletteSwatches(palette, container) {
@@ -1178,6 +1265,123 @@
         ')" title="RGB(' + c[0] + "," + c[1] + "," + c[2] + ')"></div>';
     }
     container.innerHTML = html;
+  }
+
+  // --- Alternative palette variants (same scheme, different hue) ---
+
+  var currentVariants = null; // [{scheme, newPalette, hue}, ...] or null
+  var recolorSchemeHues = []; // per-index effective hue
+
+  function getEffectiveHue(idx) {
+    if (recolorSchemeHues[idx] != null) return recolorSchemeHues[idx];
+    return recolorCustomHue != null ? recolorCustomHue : recolorAutoHue;
+  }
+
+  function renderAlternativePalettes(currentIdx) {
+    var altLabel = $("#recolor-alt-label");
+    var altARow = $("#recolor-alt-a");
+    var altBRow = $("#recolor-alt-b");
+    var scheme = recolorSchemes[currentIdx];
+
+    var palette = scheme.originalPalette;
+    var hue = getEffectiveHue(currentIdx);
+    var medianL = Recolor.paletteMedianL(palette);
+    currentVariants = Recolor.generateVariants(scheme.key, palette, hue, medianL);
+
+    if (!currentVariants) {
+      altARow.style.display = "none";
+      altBRow.style.display = "none";
+      altLabel.style.display = "none";
+      return;
+    }
+
+    altLabel.textContent = t("recolorAltLabel");
+    altLabel.style.display = "";
+
+    var rows = [altARow, altBRow];
+    var names = [$("#recolor-alt-a-name"), $("#recolor-alt-b-name")];
+    var dots = [$("#recolor-alt-a-dot"), $("#recolor-alt-b-dot")];
+    var swatches = [$("#recolor-alt-a-swatches"), $("#recolor-alt-b-swatches")];
+
+    for (var i = 0; i < 2; i++) {
+      if (i < currentVariants.length) {
+        var v = currentVariants[i];
+        rows[i].style.display = "";
+        var deg = Math.round(v.hue * 360);
+        names[i].textContent = deg + "°";
+        dots[i].style.background = "hsl(" + deg + ", 70%, 55%)";
+        renderPaletteSwatches(v.newPalette, swatches[i]);
+      } else {
+        rows[i].style.display = "none";
+      }
+    }
+  }
+
+  function applyVariant(variantIdx) {
+    if (!currentVariants || variantIdx >= currentVariants.length) return;
+    var variant = currentVariants[variantIdx];
+    var idx = recolorCurrentIndex;
+
+    showProcessing(true);
+    setTimeout(function () {
+      // Replace scheme data at current index
+      recolorSchemes[idx].scheme = variant.scheme;
+      recolorSchemes[idx].newPalette = variant.newPalette;
+      recolorSchemeHues[idx] = variant.hue;
+
+      // Recompute applied image for this scheme
+      var skinVal = recolorSkinProtect / 100;
+      var vibVal = recolorVibrance / 100;
+      recolorResults[idx] = Recolor.applyScheme(recolorImageData, variant.scheme, skinVal, vibVal);
+
+      // Rebuild correction cache for this index
+      var strength = recolorStrength / 100;
+      var blended = strength >= 1 ? recolorResults[idx]
+        : Recolor.blendWithOriginal(recolorImageData, recolorResults[idx], strength);
+      if (recolorCorrectedCache[currentMode]) {
+        recolorCorrectedCache[currentMode][idx] = autoCorrectRecolored(blended, currentMode);
+      }
+
+      renderRecolorScheme(idx);
+      showProcessing(false);
+    }, 20);
+  }
+
+  // Click handlers for alternative palette buttons
+  $("#recolor-alt-a-btn").addEventListener("click", function () { applyVariant(0); });
+  $("#recolor-alt-b-btn").addEventListener("click", function () { applyVariant(1); });
+
+  function renderCharacterColors(charColors) {
+    var container = $("#recolor-char-colors");
+    var skinRow = $("#recolor-skin-color-row");
+    var hairRow = $("#recolor-hair-color-row");
+
+    if (!charColors || (!charColors.skin && !charColors.hair)) {
+      container.style.display = "none";
+      return;
+    }
+
+    container.style.display = "";
+
+    if (charColors.skin) {
+      var s = charColors.skin;
+      skinRow.style.display = "";
+      $("#recolor-skin-color-label").textContent = t("recolorDetectedSkin");
+      $("#recolor-skin-swatch").style.background = "rgb(" + s[0] + "," + s[1] + "," + s[2] + ")";
+      $("#recolor-skin-rgb").textContent = "RGB(" + s[0] + ", " + s[1] + ", " + s[2] + ")";
+    } else {
+      skinRow.style.display = "none";
+    }
+
+    if (charColors.hair) {
+      var h = charColors.hair;
+      hairRow.style.display = "";
+      $("#recolor-hair-color-label").textContent = t("recolorDetectedHair");
+      $("#recolor-hair-swatch").style.background = "rgb(" + h[0] + "," + h[1] + "," + h[2] + ")";
+      $("#recolor-hair-rgb").textContent = "RGB(" + h[0] + ", " + h[1] + ", " + h[2] + ")";
+    } else {
+      hairRow.style.display = "none";
+    }
   }
 
   function renderRecolorSchemesPanel() {
@@ -1283,6 +1487,7 @@
       try {
         if (regenSchemes) {
           recolorSchemes = Recolor.generateSchemes(recolorImageData, recolorCustomHue);
+          recolorSchemeHues = [];
         }
         recolorResults = [];
         var skinVal = recolorSkinProtect / 100;
@@ -1339,6 +1544,19 @@
     $("#recolor-hue-value").textContent = t("recolorAutoHue");
     regenerateRecolor(true); // hue changed, rebuild schemes
   });
+
+  // --- Recolor analysis collapsible toggle ---
+
+  (function () {
+    var toggleBtn = $("#recolor-analysis-toggle");
+    var collapsible = $("#recolor-analysis-collapsible");
+    var arrow = toggleBtn.querySelector(".recolor-analysis-toggle-arrow");
+
+    toggleBtn.addEventListener("click", function () {
+      var isCollapsed = collapsible.classList.toggle("collapsed");
+      arrow.textContent = isCollapsed ? "\u25BC" : "\u25B2";
+    });
+  })();
 
   // --- Upload new image ---
 
@@ -1711,13 +1929,103 @@
     });
   }
 
-  function aiAnalyzeImage(base64Jpeg) {
+  // --- Extract skin & hair colors programmatically from original image ---
+
+  function extractCharacterColors(canvas) {
+    var Color = PicAnalysis.Color;
+    var w = canvas.width;
+    var h = canvas.height;
+    var ctx = canvas.getContext("2d");
+    var imgData = ctx.getImageData(0, 0, w, h);
+    var d = imgData.data;
+    var totalPixels = w * h;
+
+    // Subsample for performance (max ~5000 pixels)
+    var step = Math.max(1, Math.floor(totalPixels / 5000));
+
+    // Accumulators for skin pixels (weighted by skinScore)
+    var skinR = 0, skinG = 0, skinB = 0, skinW = 0;
+
+    for (var p = 0; p < totalPixels; p += step) {
+      var idx = p * 4;
+      var R = d[idx], G = d[idx + 1], B = d[idx + 2];
+      var hsl = Color.rgbToHsl(R, G, B);
+      var hue = hsl[0], sat = hsl[1], lum = hsl[2];
+
+      var sk = Recolor.skinScore(hue, sat, lum);
+
+      if (sk > 0.3) {
+        // Skin pixel — accumulate weighted by confidence
+        skinR += R * sk;
+        skinG += G * sk;
+        skinB += B * sk;
+        skinW += sk;
+      }
+    }
+
+    // Hair color is detected by Gemini vision (see aiAnalyzeImage)
+    var result = { skin: null, hair: null };
+
+    // Average skin color
+    if (skinW > 10) {
+      result.skin = [
+        Math.round(skinR / skinW),
+        Math.round(skinG / skinW),
+        Math.round(skinB / skinW)
+      ];
+    }
+
+    return result;
+  }
+
+  function formatCharacterColorsForPrompt(charColors) {
+    if (!charColors || (!charColors.skin && !charColors.hair)) return "";
+    var Color = PicAnalysis.Color;
+    var lines = [];
+    if (charColors.skin) {
+      var s = charColors.skin;
+      var shsl = Color.rgbToHsl(s[0], s[1], s[2]);
+      lines.push("- SKIN: exact RGB(" + s[0] + "," + s[1] + "," + s[2] + ") " +
+        "(Hue:" + Math.round(shsl[0] * 360) + "° Sat:" + Math.round(shsl[1] * 100) + "% Lum:" + Math.round(shsl[2] * 100) + "%)");
+    }
+    if (charColors.hair) {
+      var h = charColors.hair;
+      var hhsl = Color.rgbToHsl(h[0], h[1], h[2]);
+      lines.push("- HAIR: exact RGB(" + h[0] + "," + h[1] + "," + h[2] + ") " +
+        "(Hue:" + Math.round(hhsl[0] * 360) + "° Sat:" + Math.round(hhsl[1] * 100) + "% Lum:" + Math.round(hhsl[2] * 100) + "%)");
+    }
+    return lines.join("\n");
+  }
+
+  function buildPaletteListText(palette) {
+    var lines = [];
+    for (var i = 0; i < palette.length; i++) {
+      var c = palette[i].rgb;
+      lines.push("  [" + i + "] RGB(" + c[0] + "," + c[1] + "," + c[2] + ")");
+    }
+    return lines.join("\n");
+  }
+
+  function aiAnalyzeImage(base64Jpeg, palette) {
+    var paletteText = "";
+    if (palette && palette.length > 0) {
+      paletteText =
+        "\n5. HAIR COLOR SELECTION: Below is the image's extracted color palette (6 dominant colors). " +
+        "If any person/character is present, identify which palette color is closest to their HAIR color and output EXACTLY one line in this format:\n" +
+        "HAIR_COLOR_INDEX: <number>\n" +
+        "where <number> is the index (0-" + (palette.length - 1) + ") of the closest match. " +
+        "If no person/character or no visible hair, output: HAIR_COLOR_INDEX: -1\n\n" +
+        "PALETTE:\n" + buildPaletteListText(palette) + "\n";
+    }
+
     var prompt =
       "You are a professional color grading expert. Analyze this image and describe:\n" +
       "1. The main subject and composition elements\n" +
       "2. The current color palette and mood\n" +
       "3. The lighting conditions and color temperature\n" +
-      "Keep your analysis concise (under 200 words). Focus on elements relevant to recoloring.";
+      "4. If any people/characters are present, describe their SKIN COLOR (e.g. fair/light/medium/olive/tan/brown/dark, and the specific tone like warm peach, cool beige, etc.) and HAIR COLOR (e.g. black, dark brown, blonde, red, etc.) in detail.\n" +
+      paletteText +
+      "Keep your analysis concise (under 250 words). Focus on elements relevant to recoloring.";
 
     var contents = [{
       parts: [
@@ -1733,7 +2041,15 @@
       for (var i = 0; i < parts.length; i++) {
         if (parts[i].text) text += parts[i].text;
       }
-      return text;
+
+      // Parse hair color index from Gemini's response
+      var hairColorIndex = -1;
+      var hairMatch = text.match(/HAIR_COLOR_INDEX:\s*(-?\d+)/);
+      if (hairMatch) {
+        hairColorIndex = parseInt(hairMatch[1]);
+      }
+
+      return { text: text, hairColorIndex: hairColorIndex };
     });
   }
 
@@ -1753,12 +2069,24 @@
     return lines.join("\n");
   }
 
-  function aiRecolorImage(base64Jpeg, analysis, schemeName, scheme) {
+  function aiRecolorImage(base64Jpeg, analysis, schemeName, scheme, charColors) {
     // Get the detailed scheme description from lang keys
     var schemeDesc = t("recolorTip." + scheme.key) || "";
 
     // Build the concrete palette mapping from the programmatic engine
     var paletteMapping = buildPaletteMappingText(scheme);
+
+    // Build character color preservation block with exact RGB values
+    var charColorText = formatCharacterColorsForPrompt(charColors);
+    var charColorBlock = "";
+    if (charColorText) {
+      charColorBlock =
+        "CRITICAL — ORIGINAL CHARACTER COLORS (extracted from source image, MUST preserve exactly):\n" +
+        charColorText + "\n" +
+        "These are the MEASURED pixel values from the original image. When colorizing, you MUST reproduce these EXACT RGB values (and their brightness/saturation) for skin and hair areas.\n" +
+        "Do NOT alter the hue, saturation, or brightness of skin/hair — they must look identical to the original.\n" +
+        "Apply the color scheme ONLY to background, clothing, objects, and environment.\n\n";
+    }
 
     var prompt =
       "You are a professional colorist. Here is an analysis of this image:\n\n" +
@@ -1768,8 +2096,10 @@
       "SCHEME DESCRIPTION:\n" + schemeDesc + "\n\n" +
       "TARGET COLOR PALETTE (apply these colors based on brightness zones):\n" +
       paletteMapping + "\n\n" +
+      charColorBlock +
       "INSTRUCTIONS:\n" +
-      "- Colorize this grayscale image using ONLY the target colors from the palette above\n" +
+      "- Colorize this grayscale image using the target colors from the palette above for non-skin/non-hair areas\n" +
+      "- For skin and hair areas, use the EXACT original RGB colors listed above (if provided), matching their brightness and saturation precisely\n" +
       "- Map darker regions to the darker target colors, brighter regions to the brighter target colors\n" +
       "- Preserve the exact luminance/brightness relationships between regions\n" +
       "- Keep the EXACT same composition, subjects, structure, and level of detail\n" +
@@ -1837,12 +2167,26 @@
     // Create grayscale version for Nano Banana 2 (removes original color interference)
     var grayBase64 = canvasToGrayscaleBase64(origCanvas);
 
+    // Use cached character colors (already extracted during init), or extract now as fallback
+    var charColors = recolorCharColors || extractCharacterColors(origCanvas);
+    var palette = scheme.originalPalette || [];
+
     // Step 1: Analyze with Gemini 3.1 Pro (use COLOR original for accurate analysis)
-    aiAnalyzeImage(base64Jpeg)
-      .then(function (analysis) {
+    // Also pass the 6-color palette so Gemini can pick the hair color
+    aiAnalyzeImage(base64Jpeg, palette)
+      .then(function (result) {
+        // Extract hair color from palette based on Gemini's selection
+        var hairIdx = result.hairColorIndex;
+        if (hairIdx >= 0 && hairIdx < palette.length) {
+          charColors.hair = palette[hairIdx].rgb.slice();
+          // Update UI with Gemini-detected hair color
+          recolorCharColors = charColors;
+          renderCharacterColors(charColors);
+        }
+
         processingText.textContent = t("aiRecolorGenerating");
         // Step 2: Recolor with Nano Banana 2 (use GRAYSCALE to avoid color interference)
-        return aiRecolorImage(grayBase64, analysis, schemeName, scheme);
+        return aiRecolorImage(grayBase64, result.text, schemeName, scheme, charColors);
       })
       .then(function (imageData) {
         // Step 3: Load the returned image and display it
@@ -1899,6 +2243,7 @@
   function showAiCompare(show) {
     aiCompareContainer.classList.toggle("hidden", !show);
     aiCompareActive = show;
+    updateDownloadBtn();
   }
 
   // Re-correct a raw AI result with the current mode's parameters
