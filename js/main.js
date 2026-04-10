@@ -10,7 +10,7 @@
   var Lang = PicAnalysis.Lang;
   var t = Lang.t;
 
-  var MAX_PROCESS_DIM = 2048;
+  var MAX_PROCESS_DIM = 3840;
   var MODES = Strategy.MODES;
 
   // --- State ---
@@ -38,6 +38,7 @@
   var recolorHueDebounceTimer = null;
   var recolorSkinDebounceTimer = null;
   var recolorVibrance = 0; // -100 to 100
+  var recolorVibranceUserSet = false; // true once user moves the slider; suppresses auto-recompute on mode switch
   var recolorCharColors = null; // { skin: [R,G,B] | null, hair: [R,G,B] | null }
   var recolorVibranceDebounceTimer = null;
   var recolorDiagnosis = null;       // diagnosis of original recolor image
@@ -86,8 +87,26 @@
       // Defer heavy recolor re-correction so the button toggle renders first
       showProcessing(true);
       setTimeout(function () {
-        rerunRecolorAutoCorrection();
-        showProcessing(false);
+        // If user hasn't manually overridden vibrance, recompute it for the new mode.
+        // Mode flips the philosophy (correct vs amplify), so the auto value differs.
+        var needRegen = false;
+        if (!recolorVibranceUserSet && recolorDiagnosis) {
+          var newAuto = computeAutoVibrance(recolorDiagnosis.saturation.mean, mode);
+          if (newAuto !== recolorVibrance) {
+            applyAutoVibrance(recolorDiagnosis.saturation.mean, mode);
+            // Vibrance is baked into recolorResults via applyScheme, so a full regen is required.
+            // Drop the (now-stale) cache for both modes since the new vibrance affects both.
+            recolorCorrectedCache = {};
+            needRegen = true;
+          }
+        }
+        if (needRegen) {
+          // regenerateRecolor manages its own showProcessing lifecycle
+          regenerateRecolor(false);
+        } else {
+          rerunRecolorAutoCorrection();
+          showProcessing(false);
+        }
       }, 30);
     } else if (originalImageData) {
       // Use pre-computed cache for instant mode switching
@@ -447,6 +466,7 @@
         recolorStrength = 60;
         recolorSkinProtect = 0;
         recolorVibrance = 0;
+        recolorVibranceUserSet = false;
         recolorCustomHue = null;
         $("#recolor-strength-slider").value = 60;
         $("#recolor-strength-value").textContent = "60%";
@@ -461,6 +481,9 @@
             // Stage 1: Analyze original image for diagnosis and scene detection
             recolorDiagnosis = Analyzer.analyze(recolorImageData);
             recolorScenes = Scene.detect(recolorDiagnosis);
+
+            // Auto-set smart vibrance from saturation analysis (mode-aware)
+            applyAutoVibrance(recolorDiagnosis.saturation.mean, currentMode);
 
             // Auto-detect portrait scene → enable skin protection
             // Requires both: portrait scene active AND actual skin hues present
@@ -554,23 +577,18 @@
           adjustedDiagnosis: currentAdjustedDiagnosis,
         };
 
-        // Pre-compute other mode in background (Stage 2+3 only — diagnosis/scenes are shared)
+        // Pre-compute other mode synchronously so mode switch is always an instant display swap.
+        // Stage 1 (diagnosis) and Stage 1.5 (scenes) are shared — only Stage 2+3 need to rerun.
         var otherMode = currentMode === MODES.PHOTO ? MODES.ILLUSTRATION : MODES.PHOTO;
         var otherParams = Strategy.defaultParams(otherMode);
-        var diagSnap = currentDiagnosis;
-        var scenesSnap = currentScenes;
-        var imgSnap = originalImageData;
-        _pipelineBgTimer = setTimeout(function () {
-          _pipelineBgTimer = null;
-          var otherAdj = Strategy.route(diagSnap, otherParams, scenesSnap, otherMode);
-          var otherResult = Adjuster.adjust(imgSnap, otherAdj);
-          var otherAdjDiag = Analyzer.analyze(otherResult);
-          pipelineCache[otherMode] = {
-            adjustments: otherAdj,
-            resultData: otherResult,
-            adjustedDiagnosis: otherAdjDiag,
-          };
-        }, 0);
+        var otherAdj = Strategy.route(currentDiagnosis, otherParams, currentScenes, otherMode);
+        var otherResult = Adjuster.adjust(originalImageData, otherAdj);
+        var otherAdjDiag = Analyzer.analyze(otherResult);
+        pipelineCache[otherMode] = {
+          adjustments: otherAdj,
+          resultData: otherResult,
+          adjustedDiagnosis: otherAdjDiag,
+        };
 
         showProcessing(false);
       }, 50);
@@ -1114,12 +1132,26 @@
 
   // Core: run pipeline on a single recolored ImageData → { corrected, adjustments, correctedDiag }
   // mode: optional — defaults to currentMode for backward compat
+  //
+  // IMPORTANT: whiteBalance / tintCorrection / desaturation are filtered out
+  // when correcting a recolored image. The recolor step deliberately pushes
+  // the image toward a single hue (e.g. blue), so the diagnosis sees an
+  // extreme cool/tint bias and tries to "correct" it back toward neutral —
+  // adding warm/magenta to a blue image, which lands on purple/pink.
+  // Verified case: raw blue [97,95,223] hue 241° → corrected [148,109,139]
+  // hue 314°. Tonal adjustments (brightness, contrast, shadow, highlight,
+  // vibrance, saturation) are still applied since they don't fight the hue.
+  var SKIP_ON_RECOLOR = { whiteBalance: 1, tintCorrection: 1, desaturation: 1 };
   function autoCorrectRecolored(recoloredData, mode) {
     var m = mode || currentMode;
     var diag = Analyzer.analyze(recoloredData);
     var scenes = recolorScenes || [];
     var modeParams = Strategy.defaultParams(m);
-    var adjustments = Strategy.route(diag, modeParams, scenes, m);
+    var rawAdjustments = Strategy.route(diag, modeParams, scenes, m);
+    var adjustments = [];
+    for (var i = 0; i < rawAdjustments.length; i++) {
+      if (!SKIP_ON_RECOLOR[rawAdjustments[i].type]) adjustments.push(rawAdjustments[i]);
+    }
     var corrected = Adjuster.adjust(recoloredData, adjustments);
     var correctedDiag = Analyzer.analyze(corrected);
     return { corrected: corrected, adjustments: adjustments, correctedDiag: correctedDiag };
@@ -1334,12 +1366,26 @@
       var vibVal = recolorVibrance / 100;
       recolorResults[idx] = Recolor.applyScheme(recolorImageData, variant.scheme, skinVal, vibVal);
 
-      // Rebuild correction cache for this index
+      // Rebuild correction cache for this index (both modes, so a later
+      // mode switch doesn't display the previous variant's stale result)
       var strength = recolorStrength / 100;
       var blended = strength >= 1 ? recolorResults[idx]
         : Recolor.blendWithOriginal(recolorImageData, recolorResults[idx], strength);
       if (recolorCorrectedCache[currentMode]) {
         recolorCorrectedCache[currentMode][idx] = autoCorrectRecolored(blended, currentMode);
+      }
+      var otherMode = currentMode === MODES.PHOTO ? MODES.ILLUSTRATION : MODES.PHOTO;
+      if (recolorCorrectedCache[otherMode] && recolorCorrectedCache[otherMode].length > idx) {
+        recolorCorrectedCache[otherMode][idx] = autoCorrectRecolored(blended, otherMode);
+      }
+
+      // Invalidate AI cache for this scheme — the previously generated AI
+      // recolor was based on the old hue and would otherwise be restored on
+      // top of the new programmatic result by the renderRecolorScheme wrapper.
+      if (aiRawCache[idx]) {
+        delete aiRawCache[idx];
+        delete aiResultCache[idx];
+        delete aiComparePositions[idx];
       }
 
       renderRecolorScheme(idx);
@@ -1480,6 +1526,28 @@
   // Central regeneration: re-runs scheme generation and pixel-level apply
   // with current hue + skinProtect settings.
   // regenSchemes: true = also rebuild scheme objects (needed when hue changes)
+  // Auto vibrance based on saturation analysis + mode philosophy.
+  // Photo: correct toward neutral target (over-saturated → reduce, dull → boost).
+  // Illustration: amplify existing direction (saturated → push further, dull → push duller).
+  // Returns slider value in [-70, 70].
+  function computeAutoVibrance(satMean, mode) {
+    var target = 0.30;
+    var deviation = satMean - target; // + = too saturated, - = too dull
+    var sign = (mode === MODES.PHOTO) ? -1 : 1;
+    var v = sign * deviation * 240; // ~±60 for typical deviations of ±0.25
+    if (v > 70) v = 70;
+    if (v < -70) v = -70;
+    return Math.round(v);
+  }
+
+  function applyAutoVibrance(satMean, mode) {
+    recolorVibrance = computeAutoVibrance(satMean, mode);
+    var slider = $("#recolor-vibrance-slider");
+    if (slider) slider.value = recolorVibrance;
+    var label = $("#recolor-vibrance-value");
+    if (label) label.textContent = recolorVibrance > 0 ? "+" + recolorVibrance : "" + recolorVibrance;
+  }
+
   function regenerateRecolor(regenSchemes) {
     if (!recolorImageData) return;
     showProcessing(true);
@@ -1520,6 +1588,7 @@
 
   $("#recolor-vibrance-slider").addEventListener("change", function () {
     recolorVibrance = parseInt(this.value, 10);
+    recolorVibranceUserSet = true;
     $("#recolor-vibrance-value").textContent = recolorVibrance > 0 ? "+" + recolorVibrance : "" + recolorVibrance;
     regenerateRecolor(false); // schemes unchanged, only pixel apply
   });

@@ -349,21 +349,48 @@ PicAnalysis.Recolor = (function () {
 
   // --- Build display palette from scheme ---
 
+  // Remap palette using the EXACT same math as applyScheme so that the
+  // displayed swatches honestly preview the rendered result. Previously this
+  // used LCH-based hue rotation while applyScheme used HSL-driven RGB-axis
+  // rotation, causing the swatches to show e.g. "blue" while the actual image
+  // came out purple/pink for the same target hue label.
   function remapPalette(palette, scheme) {
     var remap = scheme.remap;
     var satMult = scheme.satMult;
+    var lumShift = scheme.lumShift;
     var result = [];
     for (var i = 0; i < palette.length; i++) {
       var p = palette[i];
-      var newHhsl = remap(p.hsl[0], p.hsl[1], p.hsl[2]);
-      // LCH-based remapping: preserve perceptual lightness, shift hue uniformly
-      var lch = Color.rgbToLch(p.rgb[0], p.rgb[1], p.rgb[2]);
-      var hueShift = newHhsl - p.hsl[0];
-      var newLchH = ((lch[2] + hueShift) % 1 + 1) % 1;
-      var newC = Math.max(0, lch[1] * satMult);
-      var newL = Color.clamp(lch[0] + scheme.lumShift * 100, 0, 100);
-      var rgb = Color.lchToRgb(newL, newC, newLchH);
-      var hsl = Color.rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      var R = p.rgb[0], G = p.rgb[1], B = p.rgb[2];
+      var targetH = remap(p.hsl[0], p.hsl[1], p.hsl[2]);
+      var dh = hueDist(p.hsl[0], targetH);
+      var theta = dh * 2 * Math.PI;
+
+      var cosT = Math.cos(theta);
+      var sinT = Math.sin(theta);
+      var omc3 = (1 - cosT) / 3;
+      var s3 = SQRT_ONE_THIRD * sinT;
+
+      var r = R / 255, g = G / 255, b = B / 255;
+      var newR = (cosT + omc3) * r + (omc3 - s3) * g + (omc3 + s3) * b;
+      var newG = (omc3 + s3) * r + (cosT + omc3) * g + (omc3 - s3) * b;
+      var newB = (omc3 - s3) * r + (omc3 + s3) * g + (cosT + omc3) * b;
+
+      if (satMult !== 1) {
+        var luma = 0.299 * newR + 0.587 * newG + 0.114 * newB;
+        newR = luma + (newR - luma) * satMult;
+        newG = luma + (newG - luma) * satMult;
+        newB = luma + (newB - luma) * satMult;
+      }
+      if (lumShift !== 0) {
+        newR += lumShift; newG += lumShift; newB += lumShift;
+      }
+
+      var outR = Math.max(0, Math.min(255, Math.round(newR * 255)));
+      var outG = Math.max(0, Math.min(255, Math.round(newG * 255)));
+      var outB = Math.max(0, Math.min(255, Math.round(newB * 255)));
+      var rgb = [outR, outG, outB];
+      var hsl = Color.rgbToHsl(outR, outG, outB);
       result.push({ rgb: rgb, hsl: hsl, count: p.count });
     }
     return result;
@@ -437,10 +464,45 @@ PicAnalysis.Recolor = (function () {
   }
 
   // --- Generate hue variants for a scheme ---
-  // Returns 2 variants of the same scheme logic with different base hues,
-  // or null if the scheme doesn't support hue variants.
+  // Returns 2 variants of the same scheme logic at different base hues, or
+  // null if the scheme doesn't support hue variants.
+  //
+  // Strategy: probe 6 evenly-spaced anchor hues (0/60/120/180/240/300 — red,
+  // yellow, green, cyan, blue, magenta), compute what each one ACTUALLY
+  // renders to (via the same RGB-axis rotation used for the image), then pick
+  // the two whose rendered dominants are most distant from the current
+  // rendered colour and from each other. The reported `hue` is the rendered
+  // dominant hue, not the input target — so the °-label the UI shows always
+  // matches the colour the user will actually get.
+  //
+  // Without this, +120°/+240° offsets on a yellow (37°) source produced
+  // labels "157°/277°" but the RGB-axis rotation through highly-saturated
+  // pixels collapses the result into purple/magenta, never reaching blue.
 
   var NO_VARIANTS = { noRecolor: 1, warmShift: 1, coolShift: 1, hueRotate: 1 };
+
+  function paletteDominantRgb(palette) {
+    // Weighted average RGB of the most populous chromatic clusters
+    var sr = 0, sg = 0, sb = 0, tw = 0;
+    for (var i = 0; i < palette.length; i++) {
+      var p = palette[i];
+      var w = p.count * Math.max(p.hsl[1], 0.05);
+      sr += p.rgb[0] * w; sg += p.rgb[1] * w; sb += p.rgb[2] * w; tw += w;
+    }
+    if (tw < 1e-6) return [128, 128, 128];
+    return [sr / tw, sg / tw, sb / tw];
+  }
+
+  function paletteDominantHue(palette) {
+    var rgb = paletteDominantRgb(palette);
+    var hsl = Color.rgbToHsl(rgb[0], rgb[1], rgb[2]);
+    return hsl[0];
+  }
+
+  function hueAbsDist(a, b) {
+    var d = Math.abs(a - b);
+    return d > 0.5 ? 1 - d : d;
+  }
 
   function generateVariants(schemeKey, originalPalette, currentHue, medianL) {
     if (NO_VARIANTS[schemeKey]) return null;
@@ -451,15 +513,45 @@ PicAnalysis.Recolor = (function () {
     }
     if (!schemeDef) return null;
 
-    var hueA = (currentHue + 1 / 3) % 1; // +120°
-    var hueB = (currentHue + 2 / 3) % 1; // +240°
+    // Reference hue = what the CURRENT scheme actually renders to
+    var currentScheme = schemeDef.fn(originalPalette, currentHue, medianL);
+    var currentPalette = remapPalette(originalPalette, currentScheme);
+    var currentRenderedHue = paletteDominantHue(currentPalette);
 
-    var schemeA = schemeDef.fn(originalPalette, hueA, medianL);
-    var schemeB = schemeDef.fn(originalPalette, hueB, medianL);
+    // 6 anchor targets — red, yellow, green, cyan, blue, magenta
+    var anchors = [0, 1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6];
+    var candidates = [];
+    for (var ai = 0; ai < anchors.length; ai++) {
+      var sc = schemeDef.fn(originalPalette, anchors[ai], medianL);
+      var pal = remapPalette(originalPalette, sc);
+      var renderedHue = paletteDominantHue(pal);
+      candidates.push({
+        scheme: sc,
+        newPalette: pal,
+        hue: renderedHue,           // labelled by actual output
+        targetHue: anchors[ai],
+        distFromCurrent: hueAbsDist(renderedHue, currentRenderedHue)
+      });
+    }
+
+    // Sort by distance from current rendered hue (most different first)
+    candidates.sort(function (a, b) { return b.distFromCurrent - a.distFromCurrent; });
+
+    // Pick the most distant, then the next most distant that is also far
+    // from the first pick (so the two alternatives don't look alike).
+    var first = candidates[0];
+    var second = null;
+    var bestSpread = -1;
+    for (var ci = 1; ci < candidates.length; ci++) {
+      var c = candidates[ci];
+      var spread = Math.min(c.distFromCurrent, hueAbsDist(c.hue, first.hue));
+      if (spread > bestSpread) { bestSpread = spread; second = c; }
+    }
+    if (!second) second = candidates[1];
 
     return [
-      { scheme: schemeA, newPalette: remapPalette(originalPalette, schemeA), hue: hueA },
-      { scheme: schemeB, newPalette: remapPalette(originalPalette, schemeB), hue: hueB }
+      { scheme: first.scheme,  newPalette: first.newPalette,  hue: first.hue },
+      { scheme: second.scheme, newPalette: second.newPalette, hue: second.hue }
     ];
   }
 
