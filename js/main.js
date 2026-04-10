@@ -11,7 +11,9 @@
   var t = Lang.t;
 
   var MAX_PROCESS_DIM = 3840;
+  var TRANSFER_REF_MAX_DIM = 1024;
   var MODES = Strategy.MODES;
+  var Transfer = PicAnalysis.Transfer;
 
   // --- State ---
 
@@ -217,9 +219,14 @@
     // Upload button context
     if (activeFeature === "recolor") {
       uploadBtn.textContent = t("uploadNewRecolor");
+    } else if (activeFeature === "transfer") {
+      uploadBtn.textContent = t("uploadNewTransfer");
     } else {
       uploadBtn.textContent = t("uploadNew");
     }
+
+    // Transfer feature labels
+    if (typeof refreshTransferText === "function") refreshTransferText();
 
     // Download button context
     updateDownloadBtn();
@@ -339,12 +346,12 @@
     activeFeature = feature;
     landing.classList.add("hidden");
     backBtn.classList.remove("hidden");
-    // Show shared controls
-    $("#mode-toggle").classList.remove("hidden");
     downloadBtn.classList.remove("hidden");
     if (feature === "tonelab") {
+      $("#mode-toggle").classList.remove("hidden");
       $(".workspace").classList.remove("hidden");
       $(".recolor-workspace").classList.add("hidden");
+      $(".transfer-workspace").classList.add("hidden");
       uploadBtn.classList.remove("hidden");
       uploadBtn.textContent = t("uploadNew");
       resetBtn.classList.remove("hidden");
@@ -356,9 +363,11 @@
         link.href = adjustedCanvas.toDataURL("image/png");
         link.click();
       };
-    } else {
+    } else if (feature === "recolor") {
+      $("#mode-toggle").classList.remove("hidden");
       $(".workspace").classList.add("hidden");
       $(".recolor-workspace").classList.remove("hidden");
+      $(".transfer-workspace").classList.add("hidden");
       uploadBtn.classList.remove("hidden");
       uploadBtn.textContent = t("uploadNewRecolor");
       resetBtn.classList.add("hidden");
@@ -372,6 +381,28 @@
         } else {
           link.download = "recolored.png";
           link.href = $("#recolor-adjusted-canvas").toDataURL("image/png");
+        }
+        link.click();
+      };
+    } else if (feature === "transfer") {
+      // Reference Match — no photo/illustration toggle (target comes from ref image)
+      $("#mode-toggle").classList.add("hidden");
+      $(".workspace").classList.add("hidden");
+      $(".recolor-workspace").classList.add("hidden");
+      $(".transfer-workspace").classList.remove("hidden");
+      uploadBtn.classList.remove("hidden");
+      uploadBtn.textContent = t("uploadNewTransfer");
+      resetBtn.classList.add("hidden");
+      apiKeyBtn.classList.remove("hidden");
+      downloadBtn.textContent = t("download");
+      downloadBtn.onclick = function () {
+        var link = document.createElement("a");
+        if (transferAiResultData) {
+          link.download = "reference-match-ai.png";
+          link.href = $("#transfer-ai-canvas").toDataURL("image/png");
+        } else {
+          link.download = "reference-match.png";
+          link.href = $("#transfer-result-canvas").toDataURL("image/png");
         }
         link.click();
       };
@@ -392,6 +423,7 @@
     landing.classList.remove("hidden");
     $(".workspace").classList.add("hidden");
     $(".recolor-workspace").classList.add("hidden");
+    $(".transfer-workspace").classList.add("hidden");
     uploadBtn.classList.add("hidden");
     backBtn.classList.add("hidden");
     // Hide workspace-specific controls on landing
@@ -1633,6 +1665,10 @@
     if (activeFeature === "recolor") {
       fileInputRecolor.value = "";
       fileInputRecolor.click();
+    } else if (activeFeature === "transfer") {
+      var ti = $("#file-input-transfer-target");
+      ti.value = "";
+      ti.click();
     } else {
       fileInput.value = "";
       fileInput.click();
@@ -2420,6 +2456,514 @@
       showAiCompare(false);
     }
   };
+
+  // ═══════════════════════════════════════════════
+  // ── Transfer (Reference Match) Feature ──
+  // ═══════════════════════════════════════════════
+
+  // State
+  var transferTargetImageData = null;   // ImageData of target (downscaled)
+  var transferRefImageData = null;      // ImageData of reference (smaller cap)
+  var transferRefProfile = null;        // Transfer.buildProfile() result
+  var transferRefDiagnosis = null;
+  var transferRefScenes = null;
+  var transferTargetDiagnosis = null;
+  var transferResultDiagnosis = null;
+  var transferResultData = null;        // ImageData of latest algorithmic result
+  var transferAiResultData = null;      // ImageData of latest AI result (if any)
+  var transferRerunTimer = null;
+  var transferParams = {
+    overall: 1.0,
+    lum: 0.8,
+    color: 0.8,
+    hue: 0.6,
+    hist: 0.3,
+    skin: 0.5,
+    detail: 0.0
+  };
+
+  // DOM refs
+  var dropZoneTransfer = $("#drop-zone-transfer");
+  var fileInputTransferTarget = $("#file-input-transfer-target");
+  var fileInputTransferRef = $("#file-input-transfer-ref");
+  var transferTargetCanvas = $("#transfer-target-canvas");
+  var transferRefCanvas = $("#transfer-ref-canvas");
+  var transferResultCanvas = $("#transfer-result-canvas");
+  var transferAiCanvas = $("#transfer-ai-canvas");
+  var transferAiCompareContainer = $("#transfer-ai-compare-container");
+  var transferAiCompareDivider = $("#transfer-ai-compare-divider");
+  var transferRefEmpty = $("#transfer-ref-empty");
+  var transferRefReplaceBtn = $("#transfer-ref-replace");
+  var transferAiBtn = $("#transfer-ai-btn");
+  var transferRefPanel = document.querySelector(".transfer-panel-ref");
+
+  // ── Landing card wiring ──
+  dropZoneTransfer.addEventListener("click", function () {
+    fileInputTransferTarget.value = "";
+    fileInputTransferTarget.click();
+  });
+  dropZoneTransfer.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    dropZoneTransfer.classList.add("drag-over");
+  });
+  dropZoneTransfer.addEventListener("dragleave", function () {
+    dropZoneTransfer.classList.remove("drag-over");
+  });
+  dropZoneTransfer.addEventListener("drop", function (e) {
+    e.preventDefault();
+    dropZoneTransfer.classList.remove("drag-over");
+    var file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith("image/")) loadTransferTarget(file);
+  });
+
+  fileInputTransferTarget.addEventListener("change", function (e) {
+    var file = e.target.files[0];
+    if (file) loadTransferTarget(file);
+  });
+  fileInputTransferRef.addEventListener("change", function (e) {
+    var file = e.target.files[0];
+    if (file) loadTransferReference(file);
+  });
+
+  // Reference image drop zone (the empty state) and Replace button
+  transferRefEmpty.addEventListener("click", function () {
+    fileInputTransferRef.value = "";
+    fileInputTransferRef.click();
+  });
+  transferRefReplaceBtn.addEventListener("click", function () {
+    fileInputTransferRef.value = "";
+    fileInputTransferRef.click();
+  });
+  transferRefPanel.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    transferRefPanel.classList.add("drag-over");
+  });
+  transferRefPanel.addEventListener("dragleave", function () {
+    transferRefPanel.classList.remove("drag-over");
+  });
+  transferRefPanel.addEventListener("drop", function (e) {
+    e.preventDefault();
+    transferRefPanel.classList.remove("drag-over");
+    var file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith("image/")) loadTransferReference(file);
+  });
+
+  // Drag-and-drop onto target panel for replacement
+  var transferTargetPanel = document.querySelector(".transfer-panel-target");
+  transferTargetPanel.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    transferTargetPanel.classList.add("drag-over");
+  });
+  transferTargetPanel.addEventListener("dragleave", function () {
+    transferTargetPanel.classList.remove("drag-over");
+  });
+  transferTargetPanel.addEventListener("drop", function (e) {
+    e.preventDefault();
+    transferTargetPanel.classList.remove("drag-over");
+    var file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith("image/")) loadTransferTarget(file);
+  });
+
+  // ── Image loading ──
+  function loadTransferTarget(file) {
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        var w = img.width, h = img.height;
+        if (Math.max(w, h) > MAX_PROCESS_DIM) {
+          var scale = MAX_PROCESS_DIM / Math.max(w, h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+        transferTargetCanvas.width = w;
+        transferTargetCanvas.height = h;
+        transferResultCanvas.width = w;
+        transferResultCanvas.height = h;
+        var tctx = transferTargetCanvas.getContext("2d");
+        tctx.drawImage(img, 0, 0, w, h);
+        transferTargetImageData = tctx.getImageData(0, 0, w, h);
+        transferTargetDiagnosis = null;
+        transferResultData = null;
+        transferAiResultData = null;
+        showTransferAiCompare(false);
+
+        // Initial draw — copy original to result (until ref is loaded)
+        transferResultCanvas.getContext("2d").drawImage(img, 0, 0, w, h);
+
+        showFeature("transfer");
+
+        // Compute target diagnosis in background (used for advanced panel)
+        setTimeout(function () {
+          transferTargetDiagnosis = Analyzer.analyze(transferTargetImageData);
+          renderTransferAdvanced();
+          if (transferRefImageData) runTransferPipeline();
+        }, 30);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function loadTransferReference(file) {
+    if (!transferTargetImageData) {
+      // No target yet — open target picker first
+      fileInputTransferTarget.value = "";
+      fileInputTransferTarget.click();
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        var w = img.width, h = img.height;
+        if (Math.max(w, h) > TRANSFER_REF_MAX_DIM) {
+          var scale = TRANSFER_REF_MAX_DIM / Math.max(w, h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+        transferRefCanvas.width = w;
+        transferRefCanvas.height = h;
+        var rctx = transferRefCanvas.getContext("2d");
+        rctx.drawImage(img, 0, 0, w, h);
+        transferRefImageData = rctx.getImageData(0, 0, w, h);
+        transferRefEmpty.style.display = "none";
+        transferAiResultData = null;
+        showTransferAiCompare(false);
+
+        showProcessing(true);
+        setTimeout(function () {
+          try {
+            transferRefProfile = Transfer.buildProfile(transferRefImageData);
+            transferRefDiagnosis = Analyzer.analyze(transferRefImageData);
+            transferRefScenes = Scene.detect(transferRefDiagnosis);
+            renderTransferRefSummary();
+            renderTransferAdvanced();
+            runTransferPipeline();
+          } catch (err) {
+            window._transferError = err.message + "\n" + err.stack;
+            showProcessing(false);
+          }
+        }, 30);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // ── Pipeline ──
+  function runTransferPipeline() {
+    if (!transferTargetImageData || !transferRefProfile) return;
+    showProcessing(true);
+    setTimeout(function () {
+      try {
+        var opts = {
+          overallStrength: transferParams.overall,
+          lumStrength: transferParams.lum,
+          colorStrength: transferParams.color,
+          hueStrength: transferParams.hue,
+          histogramShape: transferParams.hist,
+          skinProtect: transferParams.skin,
+          detailRetain: transferParams.detail
+        };
+        transferResultData = Transfer.match(transferTargetImageData, transferRefProfile, opts);
+        transferResultCanvas.getContext("2d").putImageData(transferResultData, 0, 0);
+        // Diagnosis of result for the comparison table
+        transferResultDiagnosis = Analyzer.analyze(transferResultData);
+        renderTransferAdvanced();
+      } catch (err) {
+        window._transferError = err.message + "\n" + err.stack;
+      }
+      showProcessing(false);
+    }, 20);
+  }
+
+  function scheduleTransferRerun() {
+    if (transferRerunTimer) clearTimeout(transferRerunTimer);
+    transferRerunTimer = setTimeout(function () {
+      transferRerunTimer = null;
+      runTransferPipeline();
+    }, 180);
+  }
+
+  // ── Reference summary ──
+  function renderTransferRefSummary() {
+    var panel = $("#transfer-ref-summary");
+    if (!transferRefDiagnosis) { panel.innerHTML = ""; return; }
+    var d = transferRefDiagnosis;
+    var pal = transferRefProfile && transferRefProfile.palette || [];
+
+    var swatches = "";
+    var totalCount = 0;
+    for (var i = 0; i < pal.length; i++) totalCount += pal[i].count;
+    for (var i = 0; i < pal.length; i++) {
+      var c = pal[i].rgb;
+      var pct = totalCount > 0 ? ((pal[i].count / totalCount) * 100).toFixed(0) : "0";
+      swatches +=
+        '<div class="swatch" style="background:rgb(' + c[0] + "," + c[1] + "," + c[2] + ')" ' +
+        'title="RGB(' + c[0] + "," + c[1] + "," + c[2] + ") — " + pct + '%"></div>';
+    }
+
+    panel.innerHTML =
+      '<div class="transfer-ref-summary-item"><span class="label">' + t("transferRefBrightness") + '</span>' +
+        '<span class="value">' + d.luminance.mean.toFixed(1) + '</span></div>' +
+      '<div class="transfer-ref-summary-item"><span class="label">' + t("transferRefContrast") + '</span>' +
+        '<span class="value">' + d.luminance.std.toFixed(1) + '</span></div>' +
+      '<div class="transfer-ref-summary-item"><span class="label">' + t("transferRefSat") + '</span>' +
+        '<span class="value">' + d.saturation.mean.toFixed(3) + '</span></div>' +
+      '<div class="transfer-ref-summary-item"><span class="label">' + t("transferRefTemp") + '</span>' +
+        '<span class="value">' + (d.colorTempBias > 0 ? "+" : "") + d.colorTempBias.toFixed(3) + '</span></div>' +
+      '<div class="transfer-ref-summary-palette">' +
+        '<span class="label">' + t("transferRefPalette") + '</span>' +
+        '<div class="color-swatches">' + swatches + '</div>' +
+      '</div>';
+  }
+
+  // ── Advanced analysis (collapsible) ──
+  function renderTransferAdvanced() {
+    if (transferRefScenes) {
+      renderScenesToPanel(transferRefScenes, $("#transfer-ref-scenes-panel"));
+    }
+    if (transferTargetDiagnosis) renderDiagnosis(transferTargetDiagnosis, $("#transfer-diag-target"));
+    if (transferRefDiagnosis) renderDiagnosis(transferRefDiagnosis, $("#transfer-diag-ref"));
+    if (transferResultDiagnosis) renderDiagnosis(transferResultDiagnosis, $("#transfer-diag-result"));
+
+    renderTransferPaletteRow($("#transfer-palette-target"), transferTargetDiagnosis);
+    if (transferRefProfile) {
+      renderTransferProfilePalette($("#transfer-palette-ref"), transferRefProfile.palette);
+    }
+    renderTransferPaletteRow($("#transfer-palette-result"), transferResultDiagnosis);
+  }
+
+  function renderTransferPaletteRow(el, diag) {
+    if (!el) return;
+    if (!diag || !diag.dominantColors) { el.innerHTML = ""; return; }
+    var totalCount = 0;
+    for (var i = 0; i < diag.dominantColors.length; i++) totalCount += diag.dominantColors[i].count;
+    var html = "";
+    var colors = diag.dominantColors.slice(0, 6);
+    for (var i = 0; i < colors.length; i++) {
+      var c = colors[i];
+      var r = Math.round(c.center[0]), g = Math.round(c.center[1]), b = Math.round(c.center[2]);
+      var pct = totalCount > 0 ? ((c.count / totalCount) * 100).toFixed(0) : "0";
+      html +=
+        '<div class="swatch" style="background:rgb(' + r + "," + g + "," + b + ')" ' +
+        'title="RGB(' + r + "," + g + "," + b + ") — " + pct + '%"></div>';
+    }
+    el.innerHTML = html;
+  }
+
+  function renderTransferProfilePalette(el, palette) {
+    if (!el) return;
+    if (!palette) { el.innerHTML = ""; return; }
+    var totalCount = 0;
+    for (var i = 0; i < palette.length; i++) totalCount += palette[i].count;
+    var html = "";
+    for (var i = 0; i < palette.length; i++) {
+      var c = palette[i].rgb;
+      var pct = totalCount > 0 ? ((palette[i].count / totalCount) * 100).toFixed(0) : "0";
+      html +=
+        '<div class="swatch" style="background:rgb(' + c[0] + "," + c[1] + "," + c[2] + ')" ' +
+        'title="RGB(' + c[0] + "," + c[1] + "," + c[2] + ") — " + pct + '%"></div>';
+    }
+    el.innerHTML = html;
+  }
+
+  // ── Sliders ──
+  function bindTransferSlider(sliderId, valueId, key, suffix, scale) {
+    var slider = $("#" + sliderId);
+    var valueEl = $("#" + valueId);
+    slider.addEventListener("input", function () {
+      var raw = parseInt(slider.value, 10);
+      transferParams[key] = raw / scale;
+      valueEl.textContent = raw + suffix;
+      scheduleTransferRerun();
+    });
+  }
+  bindTransferSlider("transfer-strength-overall", "transfer-strength-overall-value", "overall", "%", 100);
+  bindTransferSlider("transfer-strength-lum", "transfer-strength-lum-value", "lum", "%", 100);
+  bindTransferSlider("transfer-strength-color", "transfer-strength-color-value", "color", "%", 100);
+  bindTransferSlider("transfer-strength-hue", "transfer-strength-hue-value", "hue", "%", 100);
+  bindTransferSlider("transfer-strength-hist", "transfer-strength-hist-value", "hist", "%", 100);
+  bindTransferSlider("transfer-strength-skin", "transfer-strength-skin-value", "skin", "%", 100);
+  bindTransferSlider("transfer-strength-detail", "transfer-strength-detail-value", "detail", "%", 100);
+
+  // ── Advanced collapsible toggle ──
+  (function () {
+    var btn = $("#transfer-analysis-toggle");
+    var col = $("#transfer-analysis-collapsible");
+    var arrow = btn.querySelector(".recolor-analysis-toggle-arrow");
+    btn.addEventListener("click", function () {
+      var isCollapsed = col.classList.toggle("collapsed");
+      arrow.textContent = isCollapsed ? "\u25BC" : "\u25B2";
+    });
+  })();
+
+  // ── AI Reference Match ──
+  function showTransferAiCompare(show) {
+    transferAiCompareContainer.classList.toggle("hidden", !show);
+  }
+
+  function setTransferAiComparePos(fraction) {
+    fraction = Math.max(0, Math.min(1, fraction));
+    var pct = fraction * 100;
+    transferAiCanvas.style.clipPath = "inset(0 0 0 " + pct + "%)";
+    transferAiCanvas.style.webkitClipPath = "inset(0 0 0 " + pct + "%)";
+    transferAiCompareDivider.style.left = pct + "%";
+  }
+
+  (function () {
+    var dragging = false;
+    function frac(e) {
+      var rect = transferAiCompareContainer.getBoundingClientRect();
+      var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+      return x / rect.width;
+    }
+    transferAiCompareContainer.addEventListener("mousedown", function (e) {
+      e.preventDefault(); dragging = true; setTransferAiComparePos(frac(e));
+    });
+    transferAiCompareContainer.addEventListener("touchstart", function (e) {
+      dragging = true; setTransferAiComparePos(frac(e));
+    }, { passive: true });
+    document.addEventListener("mousemove", function (e) {
+      if (!dragging) return;
+      if (transferAiCompareContainer.classList.contains("hidden")) return;
+      setTransferAiComparePos(frac(e));
+    });
+    document.addEventListener("touchmove", function (e) {
+      if (!dragging) return;
+      if (transferAiCompareContainer.classList.contains("hidden")) return;
+      setTransferAiComparePos(frac(e));
+    }, { passive: true });
+    document.addEventListener("mouseup", function () { dragging = false; });
+    document.addEventListener("touchend", function () { dragging = false; });
+  })();
+
+  function aiTransferMatch(targetCanvas, refCanvas) {
+    // Both as base64 jpegs
+    var targetB64 = canvasToBase64Jpeg(targetCanvas);
+    var refB64 = canvasToBase64Jpeg(refCanvas);
+
+    var prompt =
+      "You are a professional colorist. The FIRST image is the TARGET image. " +
+      "The SECOND image is a REFERENCE image whose color palette, lighting, and overall mood the user wants to imitate.\n\n" +
+      "TASK: Recolor the TARGET image so that its overall color palette, lighting, contrast, saturation, and color temperature " +
+      "match the REFERENCE image as closely as possible. Do NOT change the composition, subjects, or structure of the TARGET. " +
+      "Only change colors and tones.\n\n" +
+      "INSTRUCTIONS:\n" +
+      "- Match the reference's color cast (warm/cool/tinted) on the target\n" +
+      "- Match the reference's brightness range and contrast feel\n" +
+      "- Match the reference's saturation level\n" +
+      "- Preserve all subjects, faces, and details exactly — only change color/tone\n" +
+      "- The result should look like the target image was photographed/painted under the same color grading as the reference\n" +
+      "Return ONLY the recolored target image.";
+
+    var contents = [{
+      parts: [
+        { text: prompt },
+        { inline_data: { mime_type: "image/jpeg", data: targetB64 } },
+        { inline_data: { mime_type: "image/jpeg", data: refB64 } }
+      ]
+    }];
+    var config = { responseModalities: ["TEXT", "IMAGE"] };
+
+    return callGeminiApi(NANO_BANANA_MODEL, contents, config).then(function (resp) {
+      var parts = resp.candidates && resp.candidates[0] && resp.candidates[0].content && resp.candidates[0].content.parts;
+      if (!parts) throw new Error("No response from image model");
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].inlineData && parts[i].inlineData.data) return parts[i].inlineData;
+        if (parts[i].inline_data && parts[i].inline_data.data) return parts[i].inline_data;
+      }
+      throw new Error("No image returned from AI model");
+    });
+  }
+
+  transferAiBtn.addEventListener("click", function () {
+    if (!transferTargetImageData || !transferRefImageData) return;
+    var apiKey = getApiKey();
+    if (!apiKey) { openApiKeyModal(); return; }
+
+    transferAiBtn.classList.add("loading");
+    transferAiBtn.textContent = "...";
+    processingText.textContent = t("transferAiAnalyzing");
+    showProcessing(true);
+
+    setTimeout(function () { processingText.textContent = t("transferAiGenerating"); }, 600);
+
+    aiTransferMatch(transferTargetCanvas, transferRefCanvas)
+      .then(function (imageData) {
+        return loadBase64Image(imageData.mimeType || imageData.mime_type || "image/png", imageData.data);
+      })
+      .then(function (img) {
+        var w = transferResultCanvas.width;
+        var h = transferResultCanvas.height;
+        transferAiCanvas.width = w;
+        transferAiCanvas.height = h;
+        var ctx = transferAiCanvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        transferAiResultData = ctx.getImageData(0, 0, w, h);
+
+        showTransferAiCompare(true);
+        setTransferAiComparePos(0.5);
+
+        showProcessing(false);
+        transferAiBtn.classList.remove("loading");
+        transferAiBtn.textContent = t("transferAiBtn");
+      })
+      .catch(function (err) {
+        showProcessing(false);
+        transferAiBtn.classList.remove("loading");
+        transferAiBtn.textContent = t("transferAiBtn");
+        alert((err && err.message) || String(err));
+      });
+  });
+
+  // ── Text refresh ──
+  function refreshTransferText() {
+    $("#landing-transfer-title").textContent = t("landingTransferTitle");
+    $("#landing-transfer-desc").textContent = t("landingTransferDesc");
+    $("#landing-transfer-f1").textContent = t("landingTransferF1");
+    $("#landing-transfer-f2").textContent = t("landingTransferF2");
+    $("#landing-transfer-f3").textContent = t("landingTransferF3");
+    $("#drop-text-transfer").textContent = t("dropTextTransfer");
+    $("#drop-hint-transfer").textContent = t("dropHintTransfer");
+
+    $("#transfer-title-target").textContent = t("transferTitleTarget");
+    $("#transfer-title-ref").textContent = t("transferTitleRef");
+    $("#transfer-title-result").textContent = t("transferTitleResult");
+    $("#transfer-ref-empty-text").textContent = t("transferRefEmptyText");
+    $("#transfer-ref-empty-hint").textContent = t("transferRefEmptyHint");
+    $("#transfer-ref-replace").textContent = t("transferRefReplace");
+
+    $("#transfer-title-summary").textContent = t("transferRefSummary");
+    $("#transfer-title-controls").textContent = t("transferControlsTitle");
+    $("#transfer-strength-overall-label").textContent = t("transferStrengthOverall");
+    $("#transfer-strength-lum-label").textContent = t("transferStrengthLum");
+    $("#transfer-strength-color-label").textContent = t("transferStrengthColor");
+    $("#transfer-strength-hue-label").textContent = t("transferStrengthHue");
+    $("#transfer-strength-hist-label").textContent = t("transferStrengthHist");
+    $("#transfer-strength-skin-label").textContent = t("transferStrengthSkin");
+    $("#transfer-strength-detail-label").textContent = t("transferStrengthDetail");
+
+    $("#transfer-analysis-toggle-text").textContent = t("transferAdvancedAnalysis");
+    $("#transfer-title-ref-scenes").textContent = t("transferRefScenes");
+    $("#transfer-title-diagnosis").textContent = t("transferDiagnosisCompare");
+    $("#transfer-diag-title-target").textContent = t("transferDiagTarget");
+    $("#transfer-diag-title-ref").textContent = t("transferDiagRef");
+    $("#transfer-diag-title-result").textContent = t("transferDiagResult");
+    $("#transfer-title-palette-compare").textContent = t("transferPaletteCompare");
+    $("#transfer-palette-target-label").textContent = t("transferPaletteTarget");
+    $("#transfer-palette-ref-label").textContent = t("transferPaletteRef");
+    $("#transfer-palette-result-label").textContent = t("transferPaletteResult");
+
+    $("#transfer-ai-btn").textContent = t("transferAiBtn");
+    $("#transfer-ai-compare-label-left").textContent = t("aiCompareLabelLeft");
+    $("#transfer-ai-compare-label-right").textContent = t("aiCompareLabelRight");
+
+    // Re-render any panels that contain translatable strings
+    if (transferRefDiagnosis) renderTransferRefSummary();
+    renderTransferAdvanced();
+  }
 
   // --- Init ---
 

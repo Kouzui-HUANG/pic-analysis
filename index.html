@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ToneLab</title>
-  <link rel="stylesheet" href="css/style.css?v=16">
+  <link rel="stylesheet" href="css/style.css?v=17">
 </head>
 <body>
 
@@ -43,6 +43,23 @@
       </div>
     </div>
 
+    <div id="drop-zone-transfer" class="drop-zone-card drop-zone-card-transfer" data-mode="transfer">
+      <div class="drop-card-header">
+        <span class="drop-card-icon">🪞</span>
+        <h2 id="landing-transfer-title" class="drop-card-title">參考圖仿調色</h2>
+      </div>
+      <p id="landing-transfer-desc" class="drop-card-desc">上傳一張參考圖，系統會分析其色系、光暗、濃度，並將你的目標圖盡可能調整接近</p>
+      <div class="drop-card-features">
+        <span id="landing-transfer-f1">LAB 統計轉移</span>
+        <span id="landing-transfer-f2">直方圖塑形</span>
+        <span id="landing-transfer-f3">色相對齊</span>
+      </div>
+      <div class="drop-card-action">
+        <p id="drop-text-transfer">先拖放「目標圖」至此處，或點擊上傳</p>
+        <p class="drop-hint" id="drop-hint-transfer">第二步將上傳參考圖</p>
+      </div>
+    </div>
+
     <div id="drop-zone" class="drop-zone-card" data-mode="tonelab">
       <div class="drop-card-header">
         <span class="drop-card-icon">🔬</span>
@@ -62,6 +79,8 @@
   </div>
   <input type="file" id="file-input" accept="image/*">
   <input type="file" id="file-input-recolor" accept="image/*">
+  <input type="file" id="file-input-transfer-target" accept="image/*">
+  <input type="file" id="file-input-transfer-ref" accept="image/*">
 
   <!-- Processing overlay -->
   <div id="processing-overlay" class="hidden">
@@ -292,6 +311,151 @@
     </div>
   </div>
 
+  <!-- Transfer Workspace (Reference Match — hidden until target+ref loaded) -->
+  <div class="transfer-workspace hidden">
+    <div class="image-panels image-panels-3col">
+      <div class="image-panel transfer-panel-target">
+        <h2 id="transfer-title-target">目標原圖</h2>
+        <div class="canvas-wrap">
+          <canvas id="transfer-target-canvas"></canvas>
+        </div>
+      </div>
+      <div class="image-panel transfer-panel-ref">
+        <h2 id="transfer-title-ref">參考圖</h2>
+        <div class="canvas-wrap" id="transfer-ref-wrap">
+          <canvas id="transfer-ref-canvas"></canvas>
+          <div class="transfer-ref-empty" id="transfer-ref-empty">
+            <p id="transfer-ref-empty-text">拖放參考圖至此處，或點擊上傳</p>
+            <p class="drop-hint" id="transfer-ref-empty-hint">將以參考圖為調色目標</p>
+          </div>
+        </div>
+        <button id="transfer-ref-replace" class="transfer-ref-replace" type="button">更換參考圖</button>
+      </div>
+      <div class="image-panel transfer-panel-result">
+        <div class="recolor-result-header">
+          <h2 id="transfer-title-result">仿調色結果</h2>
+          <button id="transfer-ai-btn" class="ai-recolor-btn" type="button">AI</button>
+        </div>
+        <div class="canvas-wrap recolor-adjusted-wrap" id="transfer-result-wrap">
+          <canvas id="transfer-result-canvas"></canvas>
+          <div id="transfer-ai-compare-container" class="ai-compare-container hidden">
+            <canvas id="transfer-ai-canvas"></canvas>
+            <div id="transfer-ai-compare-divider" class="ai-compare-divider">
+              <div class="ai-compare-handle">
+                <span class="ai-compare-arrow">&lsaquo;</span>
+                <span class="ai-compare-arrow">&rsaquo;</span>
+              </div>
+            </div>
+            <span class="ai-compare-label ai-compare-label-left" id="transfer-ai-compare-label-left">演算法</span>
+            <span class="ai-compare-label ai-compare-label-right" id="transfer-ai-compare-label-right">AI</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reference profile summary -->
+    <div class="section-title" id="transfer-title-summary">參考圖摘要</div>
+    <div id="transfer-ref-summary" class="transfer-ref-summary"></div>
+
+    <!-- Controls -->
+    <div class="section-title" id="transfer-title-controls">仿調色控制</div>
+    <div class="recolor-controls-panel transfer-controls-panel" id="transfer-controls-panel">
+      <div class="recolor-control-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="transfer-strength-overall-label">整體強度</label>
+          <span class="recolor-control-value" id="transfer-strength-overall-value">100%</span>
+        </div>
+        <input type="range" id="transfer-strength-overall" class="recolor-slider" min="0" max="100" value="100" step="1">
+      </div>
+      <div class="recolor-control-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="transfer-strength-lum-label">光暗匹配</label>
+          <span class="recolor-control-value" id="transfer-strength-lum-value">80%</span>
+        </div>
+        <input type="range" id="transfer-strength-lum" class="recolor-slider" min="0" max="100" value="80" step="1">
+      </div>
+      <div class="recolor-control-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="transfer-strength-color-label">色彩匹配</label>
+          <span class="recolor-control-value" id="transfer-strength-color-value">80%</span>
+        </div>
+        <input type="range" id="transfer-strength-color" class="recolor-slider" min="0" max="100" value="80" step="1">
+      </div>
+      <div class="recolor-control-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="transfer-strength-hue-label">色相對齊</label>
+          <span class="recolor-control-value" id="transfer-strength-hue-value">60%</span>
+        </div>
+        <input type="range" id="transfer-strength-hue" class="recolor-slider" min="0" max="100" value="60" step="1">
+      </div>
+      <div class="recolor-control-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="transfer-strength-hist-label">直方圖塑形</label>
+          <span class="recolor-control-value" id="transfer-strength-hist-value">30%</span>
+        </div>
+        <input type="range" id="transfer-strength-hist" class="recolor-slider" min="0" max="100" value="30" step="1">
+      </div>
+      <div class="recolor-control-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="transfer-strength-skin-label">膚色保護</label>
+          <span class="recolor-control-value" id="transfer-strength-skin-value">50%</span>
+        </div>
+        <input type="range" id="transfer-strength-skin" class="recolor-slider" min="0" max="100" value="50" step="1">
+      </div>
+      <div class="recolor-control-group">
+        <div class="recolor-control-header">
+          <label class="recolor-control-label" id="transfer-strength-detail-label">保留目標細節</label>
+          <span class="recolor-control-value" id="transfer-strength-detail-value">0%</span>
+        </div>
+        <input type="range" id="transfer-strength-detail" class="recolor-slider" min="0" max="100" value="0" step="1">
+      </div>
+    </div>
+
+    <!-- Collapsible advanced analysis -->
+    <button id="transfer-analysis-toggle" class="recolor-analysis-toggle" type="button">
+      <span id="transfer-analysis-toggle-text">進階分析</span>
+      <span class="recolor-analysis-toggle-arrow">&#9660;</span>
+    </button>
+    <div id="transfer-analysis-collapsible" class="recolor-analysis-collapsible collapsed">
+      <div class="section-title" id="transfer-title-ref-scenes">參考圖場景偵測</div>
+      <div id="transfer-ref-scenes-panel" class="scenes-row"></div>
+
+      <div class="section-title" id="transfer-title-diagnosis">三方診斷對照</div>
+      <div class="diagnosis-panels diagnosis-panels-3col">
+        <div class="diagnosis-column">
+          <h3 class="diag-column-title" id="transfer-diag-title-target">目標</h3>
+          <div id="transfer-diag-target"></div>
+        </div>
+        <div class="diagnosis-column">
+          <h3 class="diag-column-title" id="transfer-diag-title-ref">參考</h3>
+          <div id="transfer-diag-ref"></div>
+        </div>
+        <div class="diagnosis-column">
+          <h3 class="diag-column-title" id="transfer-diag-title-result">結果</h3>
+          <div id="transfer-diag-result"></div>
+        </div>
+      </div>
+
+      <div class="section-title" id="transfer-title-palette-compare">主色盤對照</div>
+      <div class="recolor-palette-comparison transfer-palette-comparison">
+        <div class="recolor-palette-group">
+          <span class="diag-label" id="transfer-palette-target-label">目標</span>
+          <div id="transfer-palette-target" class="color-swatches"></div>
+        </div>
+        <div class="recolor-palette-arrow">→</div>
+        <div class="recolor-palette-group">
+          <span class="diag-label" id="transfer-palette-ref-label">參考</span>
+          <div id="transfer-palette-ref" class="color-swatches"></div>
+        </div>
+        <div class="recolor-palette-arrow">⇒</div>
+        <div class="recolor-palette-group">
+          <span class="diag-label" id="transfer-palette-result-label">結果</span>
+          <div id="transfer-palette-result" class="color-swatches"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- API Key Modal -->
   <div id="api-key-modal" class="modal-overlay hidden">
     <div class="modal-dialog">
@@ -322,12 +486,13 @@
   <!-- Scripts: loaded in dependency order -->
   <script src="js/color.js?v=13"></script>
   <script src="js/stats.js?v=13"></script>
-  <script src="js/lang.js?v=17"></script>
+  <script src="js/lang.js?v=18"></script>
   <script src="js/analyzer.js?v=13"></script>
   <script src="js/scene.js?v=13"></script>
   <script src="js/strategy.js?v=13"></script>
   <script src="js/adjuster.js?v=13"></script>
   <script src="js/recolor.js?v=19"></script>
-  <script src="js/main.js?v=18"></script>
+  <script src="js/transfer.js?v=1"></script>
+  <script src="js/main.js?v=19"></script>
 </body>
 </html>
