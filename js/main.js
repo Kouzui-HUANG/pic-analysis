@@ -33,7 +33,7 @@
   var recolorCurrentIndex = 0;
   var recolorResults = []; // cached ImageData per scheme (full strength)
   var activeFeature = null; // "tonelab" or "recolor"
-  var recolorStrength = 60; // 0-100
+  var recolorStrength = 75; // 0-100
   var recolorSkinProtect = 0; // 0-100 (maps to 0-1 for engine)
   var recolorCustomHue = null; // null = auto, 0-1 = hue fraction
   var recolorAutoHue = 0; // cached auto-detected hue (0-1)
@@ -93,7 +93,7 @@
         // Mode flips the philosophy (correct vs amplify), so the auto value differs.
         var needRegen = false;
         if (!recolorVibranceUserSet && recolorDiagnosis) {
-          var newAuto = computeAutoVibrance(recolorDiagnosis.saturation.mean, mode);
+          var newAuto = computeAutoVibrance(recolorDiagnosis.saturation.mean, recolorDiagnosis.saturation.std, mode);
           if (newAuto !== recolorVibrance) {
             applyAutoVibrance(recolorDiagnosis.saturation.mean, mode);
             // Vibrance is baked into recolorResults via applyScheme, so a full regen is required.
@@ -375,7 +375,7 @@
       updateDownloadBtn();
       downloadBtn.onclick = function () {
         var link = document.createElement("a");
-        if (aiResultCache[recolorCurrentIndex]) {
+        if (aiResultCache[recolorCurrentIndex] && currentAiCompareShowsAi()) {
           link.download = "recolored-ai.png";
           link.href = $("#recolor-ai-canvas").toDataURL("image/png");
         } else {
@@ -411,11 +411,21 @@
 
   function updateDownloadBtn() {
     if (activeFeature !== "recolor") return;
-    if (aiResultCache[recolorCurrentIndex]) {
+    if (aiResultCache[recolorCurrentIndex] && currentAiCompareShowsAi()) {
       downloadBtn.textContent = t("downloadAi");
     } else {
       downloadBtn.textContent = t("download");
     }
+  }
+
+  // Returns true when the AI compare slider is positioned such that the AI
+  // side is (at least) the dominant half on screen. fraction <= 0.5 means the
+  // divider is on the left half, revealing the AI canvas on most of the view.
+  function currentAiCompareShowsAi() {
+    if (!aiResultCache[recolorCurrentIndex]) return false;
+    var frac = aiComparePositions[recolorCurrentIndex];
+    if (frac == null) frac = 0.5;
+    return frac <= 0.5;
   }
 
   function backToLanding() {
@@ -495,13 +505,13 @@
         resetAiCache();
 
         // Reset controls for new image
-        recolorStrength = 60;
+        recolorStrength = 75;
         recolorSkinProtect = 0;
         recolorVibrance = 0;
         recolorVibranceUserSet = false;
         recolorCustomHue = null;
-        $("#recolor-strength-slider").value = 60;
-        $("#recolor-strength-value").textContent = "60%";
+        $("#recolor-strength-slider").value = 75;
+        $("#recolor-strength-value").textContent = "75%";
         $("#recolor-vibrance-slider").value = 0;
         $("#recolor-vibrance-value").textContent = "0";
         $("#recolor-hue-auto-btn").classList.add("active");
@@ -517,21 +527,44 @@
             // Auto-set smart vibrance from saturation analysis (mode-aware)
             applyAutoVibrance(recolorDiagnosis.saturation.mean, currentMode);
 
-            // Auto-detect portrait scene → enable skin protection
-            // Requires both: portrait scene active AND actual skin hues present
+            // Auto-detect skin → enable skin protection.
+            // Scene-factor signal (factor.skinHues) is unreliable because it
+            // only inspects the top-6 dominant palette colours — any image
+            // whose subject is small relative to the background misses
+            // detection even when skin is clearly present pixel-wise.
+            // Pixel-level density is authoritative: sample ~3000 pixels and
+            // count how many pass Recolor.skinScore > 0.3.
+            //   density < 0.5%  → no auto-protect (subject tiny or absent)
+            //   density 0.5-2%  → 55% (moderate presence)
+            //   density ≥ 2%    → 70% (substantial face region)
+            // Scene detection is still consulted as a boost: confirmed
+            // portrait scene raises the top tier to 75%.
+            var skinDensity = 0;
+            (function() {
+              var sd = recolorImageData.data;
+              var totalPix = recolorImageData.width * recolorImageData.height;
+              var step = Math.max(1, Math.floor(totalPix / 3000));
+              var skinHits = 0, scanned = 0;
+              var Color = PicAnalysis.Color;
+              for (var p = 0; p < totalPix; p += step) {
+                var idx = p * 4;
+                var hsl = Color.rgbToHsl(sd[idx], sd[idx + 1], sd[idx + 2]);
+                if (Recolor.skinScore(hsl[0], hsl[1], hsl[2]) > 0.3) skinHits++;
+                scanned++;
+              }
+              skinDensity = scanned > 0 ? skinHits / scanned : 0;
+            })();
+            var portraitActive = false;
             for (var si = 0; si < recolorScenes.length; si++) {
               if (recolorScenes[si].type === "portrait" && recolorScenes[si].active) {
-                var factors = recolorScenes[si].factors;
-                var hasSkin = false;
-                for (var fi = 0; fi < factors.length; fi++) {
-                  if (factors[fi].key === "factor.skinHues" && factors[fi].score > 0.15) {
-                    hasSkin = true;
-                    break;
-                  }
-                }
-                if (hasSkin) recolorSkinProtect = 60;
+                portraitActive = true;
                 break;
               }
+            }
+            if (skinDensity >= 0.02) {
+              recolorSkinProtect = portraitActive ? 75 : 70;
+            } else if (skinDensity >= 0.005) {
+              recolorSkinProtect = 55;
             }
             $("#recolor-skin-slider").value = recolorSkinProtect;
             $("#recolor-skin-value").textContent = recolorSkinProtect + "%";
@@ -1445,8 +1478,22 @@
       var s = charColors.skin;
       skinRow.style.display = "";
       $("#recolor-skin-color-label").textContent = t("recolorDetectedSkin");
-      $("#recolor-skin-swatch").style.background = "rgb(" + s[0] + "," + s[1] + "," + s[2] + ")";
-      $("#recolor-skin-rgb").textContent = "RGB(" + s[0] + ", " + s[1] + ", " + s[2] + ")";
+      var swatch = $("#recolor-skin-swatch");
+      var rgbLabel = $("#recolor-skin-rgb");
+      if (charColors.skinShadow && charColors.skinHighlight) {
+        var lo = charColors.skinShadow, mid = s, hi = charColors.skinHighlight;
+        swatch.style.background =
+          "linear-gradient(90deg, rgb(" + lo[0] + "," + lo[1] + "," + lo[2] + ") 0%, " +
+          "rgb(" + mid[0] + "," + mid[1] + "," + mid[2] + ") 50%, " +
+          "rgb(" + hi[0] + "," + hi[1] + "," + hi[2] + ") 100%)";
+        rgbLabel.textContent =
+          "RGB(" + lo[0] + "," + lo[1] + "," + lo[2] + ") \u2192 " +
+          "(" + mid[0] + "," + mid[1] + "," + mid[2] + ") \u2192 " +
+          "(" + hi[0] + "," + hi[1] + "," + hi[2] + ")";
+      } else {
+        swatch.style.background = "rgb(" + s[0] + "," + s[1] + "," + s[2] + ")";
+        rgbLabel.textContent = "RGB(" + s[0] + ", " + s[1] + ", " + s[2] + ")";
+      }
     } else {
       skinRow.style.display = "none";
     }
@@ -1561,19 +1608,39 @@
   // Auto vibrance based on saturation analysis + mode philosophy.
   // Photo: correct toward neutral target (over-saturated → reduce, dull → boost).
   // Illustration: amplify existing direction (saturated → push further, dull → push duller).
+  //
+  // Two-term formula:
+  //   base    = deviation from target (how far mean is from 0.30)
+  //   variety = bonus for sat.std above 0.08 (images with rich color variance
+  //             benefit more from vibrance boost/cut than flat images)
+  //
+  // Without the variety term, images whose mean sits near 0.30 get ±3 which is
+  // essentially no-op — even when they have obviously vivid or muted areas.
   // Returns slider value in [-70, 70].
-  function computeAutoVibrance(satMean, mode) {
+  function computeAutoVibrance(satMean, satStd, mode) {
     var target = 0.30;
     var deviation = satMean - target; // + = too saturated, - = too dull
     var sign = (mode === MODES.PHOTO) ? -1 : 1;
-    var v = sign * deviation * 240; // ~±60 for typical deviations of ±0.25
-    if (v > 70) v = 70;
-    if (v < -70) v = -70;
+    // Coefficients reduced 200→150 (base) and 200→100 (variety): previous
+    // values pushed rich-variance images (e.g. illustrations with satMean
+    // 0.47 std 0.20) to the ±70 clamp, which desaturated the recolor preview
+    // so much that schemes looked washed out. The new balance still reacts
+    // strongly to over/under-saturation but no longer slams the clamp for
+    // normal vivid content.
+    var base = deviation * 150;                       // ~±38 for extreme means
+    var variety = Math.max(0, (satStd - 0.08) * 100); // 0..~15 for std 0.08..0.23
+    var v = sign * (base + variety);
+    // Clamp ±50 (from ±70): a recolor preview with ±70 vibrance applied on
+    // top of the scheme's own satMult often over-corrects. ±50 leaves
+    // headroom for the user to push further manually if needed.
+    if (v > 50) v = 50;
+    if (v < -50) v = -50;
     return Math.round(v);
   }
 
   function applyAutoVibrance(satMean, mode) {
-    recolorVibrance = computeAutoVibrance(satMean, mode);
+    var satStd = recolorDiagnosis ? recolorDiagnosis.saturation.std : 0;
+    recolorVibrance = computeAutoVibrance(satMean, satStd, mode);
     var slider = $("#recolor-vibrance-slider");
     if (slider) slider.value = recolorVibrance;
     var label = $("#recolor-vibrance-value");
@@ -2035,6 +2102,19 @@
   }
 
   // --- Extract skin & hair colors programmatically from original image ---
+  //
+  // Skin is extracted as THREE luminance-stratified anchors (shadow / mid /
+  // highlight) rather than a single average. Reason: a flat mean of all
+  // skin pixels collapses face shading to a muddy L~55% tone (the classic
+  // "wheat/tan" look) which, when fed to Nano Banana as the lone skin
+  // reference, causes the AI to paint entire faces in that uniform colour.
+  // By giving the AI three anchors and a luminance mapping, it can restore
+  // the natural shadow→highlight variation of real skin.
+  //
+  // Filtering uses skinScore > 0.5 (stricter than the 0.3 used for
+  // auto-enabling skin protection) and excludes L < 0.25 to avoid pulling
+  // in dark brown hair and deep shadow regions that the wide skinScore
+  // envelope would otherwise accept.
 
   function extractCharacterColors(canvas) {
     var Color = PicAnalysis.Color;
@@ -2048,36 +2128,47 @@
     // Subsample for performance (max ~5000 pixels)
     var step = Math.max(1, Math.floor(totalPixels / 5000));
 
-    // Accumulators for skin pixels (weighted by skinScore)
-    var skinR = 0, skinG = 0, skinB = 0, skinW = 0;
-
+    // Collect high-confidence skin pixels with per-pixel luminance
+    var samples = [];
     for (var p = 0; p < totalPixels; p += step) {
       var idx = p * 4;
       var R = d[idx], G = d[idx + 1], B = d[idx + 2];
       var hsl = Color.rgbToHsl(R, G, B);
-      var hue = hsl[0], sat = hsl[1], lum = hsl[2];
-
-      var sk = Recolor.skinScore(hue, sat, lum);
-
-      if (sk > 0.3) {
-        // Skin pixel — accumulate weighted by confidence
-        skinR += R * sk;
-        skinG += G * sk;
-        skinB += B * sk;
-        skinW += sk;
+      var lum = hsl[2];
+      if (lum < 0.25) continue;
+      var sk = Recolor.skinScore(hsl[0], hsl[1], lum);
+      if (sk > 0.5) {
+        samples.push({ r: R, g: G, b: B, l: lum, w: sk });
       }
     }
 
-    // Hair color is detected by Gemini vision (see aiAnalyzeImage)
-    var result = { skin: null, hair: null };
+    var result = { skin: null, skinShadow: null, skinHighlight: null, hair: null };
+    if (samples.length < 10) return result;
 
-    // Average skin color
-    if (skinW > 10) {
-      result.skin = [
-        Math.round(skinR / skinW),
-        Math.round(skinG / skinW),
-        Math.round(skinB / skinW)
-      ];
+    // Weighted average over a luminance band [loPct, hiPct] of sorted samples
+    samples.sort(function (a, b) { return a.l - b.l; });
+    function bandAvg(loPct, hiPct) {
+      var n = samples.length;
+      var lo = Math.floor(n * loPct);
+      var hi = Math.min(n, Math.max(lo + 1, Math.ceil(n * hiPct)));
+      var sr = 0, sg = 0, sb = 0, sw = 0;
+      for (var i = lo; i < hi; i++) {
+        var s = samples[i];
+        sr += s.r * s.w; sg += s.g * s.w; sb += s.b * s.w; sw += s.w;
+      }
+      if (sw < 1e-6) return null;
+      return [Math.round(sr / sw), Math.round(sg / sw), Math.round(sb / sw)];
+    }
+
+    // Mid: P40-P60 (central 20% for a stable midtone, resists outliers)
+    result.skin = bandAvg(0.40, 0.60);
+    // Only emit shadow/highlight anchors when the skin has meaningful
+    // luminance spread — otherwise three near-identical RGBs just add
+    // prompt noise without helping the AI.
+    var lumSpread = samples[samples.length - 1].l - samples[0].l;
+    if (lumSpread >= 0.15 && samples.length >= 30) {
+      result.skinShadow = bandAvg(0.10, 0.25);
+      result.skinHighlight = bandAvg(0.75, 0.90);
     }
 
     return result;
@@ -2087,17 +2178,25 @@
     if (!charColors || (!charColors.skin && !charColors.hair)) return "";
     var Color = PicAnalysis.Color;
     var lines = [];
-    if (charColors.skin) {
-      var s = charColors.skin;
-      var shsl = Color.rgbToHsl(s[0], s[1], s[2]);
-      lines.push("- SKIN: exact RGB(" + s[0] + "," + s[1] + "," + s[2] + ") " +
-        "(Hue:" + Math.round(shsl[0] * 360) + "° Sat:" + Math.round(shsl[1] * 100) + "% Lum:" + Math.round(shsl[2] * 100) + "%)");
+    function skinLine(label, rgb) {
+      var hsl = Color.rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      return "- " + label + ": RGB(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ") " +
+        "at Hue " + Math.round(hsl[0] * 360) + "°, Sat " + Math.round(hsl[1] * 100) + "%, Lum " + Math.round(hsl[2] * 100) + "%";
+    }
+    if (charColors.skinShadow && charColors.skin && charColors.skinHighlight) {
+      // Three-anchor skin gradient — gives the AI the luminance map it needs
+      // to paint shaded skin instead of a flat wheat tone.
+      lines.push(skinLine("SKIN SHADOW", charColors.skinShadow));
+      lines.push(skinLine("SKIN MIDTONE", charColors.skin));
+      lines.push(skinLine("SKIN HIGHLIGHT", charColors.skinHighlight));
+    } else if (charColors.skin) {
+      lines.push(skinLine("SKIN", charColors.skin));
     }
     if (charColors.hair) {
       var h = charColors.hair;
       var hhsl = Color.rgbToHsl(h[0], h[1], h[2]);
-      lines.push("- HAIR: exact RGB(" + h[0] + "," + h[1] + "," + h[2] + ") " +
-        "(Hue:" + Math.round(hhsl[0] * 360) + "° Sat:" + Math.round(hhsl[1] * 100) + "% Lum:" + Math.round(hhsl[2] * 100) + "%)");
+      lines.push("- HAIR: RGB(" + h[0] + "," + h[1] + "," + h[2] + ") " +
+        "at Hue " + Math.round(hhsl[0] * 360) + "°, Sat " + Math.round(hhsl[1] * 100) + "%, Lum " + Math.round(hhsl[2] * 100) + "%");
     }
     return lines.join("\n");
   }
@@ -2183,14 +2282,27 @@
 
     // Build character color preservation block with exact RGB values
     var charColorText = formatCharacterColorsForPrompt(charColors);
+    var hasSkinGradient = !!(charColors && charColors.skinShadow && charColors.skinHighlight);
     var charColorBlock = "";
     if (charColorText) {
       charColorBlock =
-        "CRITICAL — ORIGINAL CHARACTER COLORS (extracted from source image, MUST preserve exactly):\n" +
-        charColorText + "\n" +
-        "These are the MEASURED pixel values from the original image. When colorizing, you MUST reproduce these EXACT RGB values (and their brightness/saturation) for skin and hair areas.\n" +
-        "Do NOT alter the hue, saturation, or brightness of skin/hair — they must look identical to the original.\n" +
-        "Apply the color scheme ONLY to background, clothing, objects, and environment.\n\n";
+        "CRITICAL — ORIGINAL CHARACTER COLORS (measured from the source image, MUST preserve):\n" +
+        charColorText + "\n";
+      if (hasSkinGradient) {
+        charColorBlock +=
+          "SKIN RENDERING RULE (read carefully):\n" +
+          "- The three SKIN anchors above represent the original shadow / midtone / highlight of the character's skin.\n" +
+          "- For every skin pixel in the grayscale image, interpolate between these three anchors based on its local grayscale luminance — DARK grayscale → SKIN SHADOW, MID grayscale → SKIN MIDTONE, BRIGHT grayscale → SKIN HIGHLIGHT. Use smooth interpolation between adjacent anchors; do NOT snap to a single anchor.\n" +
+          "- DO NOT paint the entire face/body in a single uniform tone. Skin MUST retain its shadow→highlight variation.\n" +
+          "- Skin hue MUST stay within 5°–50° (warm peach/tan/brown). Never push skin toward yellow (>55°), green, blue, purple, or grey.\n";
+      } else {
+        charColorBlock +=
+          "SKIN RENDERING RULE:\n" +
+          "- Use the SKIN colour above as the midtone anchor. Preserve the natural shadow→highlight variation visible in the grayscale image — darker skin regions slightly darker than the anchor, brighter regions slightly brighter — without flattening the face to one tone.\n" +
+          "- Skin hue MUST stay within 5°–50° (warm peach/tan/brown). Never shift skin toward yellow (>55°), green, blue, purple, or grey.\n";
+      }
+      charColorBlock +=
+        "Apply the color scheme ONLY to background, clothing, objects, and environment — NOT to skin or hair.\n\n";
     }
 
     var prompt =
@@ -2199,16 +2311,17 @@
       "RECOLOR TASK: Apply a \"" + schemeName + "\" color scheme to this image.\n" +
       "IMPORTANT: The attached image has been intentionally converted to GRAYSCALE to give you full creative control over coloring. Use the luminance/brightness information to guide where to place colors.\n\n" +
       "SCHEME DESCRIPTION:\n" + schemeDesc + "\n\n" +
-      "TARGET COLOR PALETTE (apply these colors based on brightness zones):\n" +
+      "TARGET COLOR PALETTE (apply these colors to NON-skin / NON-hair regions, based on brightness zones):\n" +
       paletteMapping + "\n\n" +
       charColorBlock +
       "INSTRUCTIONS:\n" +
-      "- Colorize this grayscale image using the target colors from the palette above for non-skin/non-hair areas\n" +
-      "- For skin and hair areas, use the EXACT original RGB colors listed above (if provided), matching their brightness and saturation precisely\n" +
-      "- Map darker regions to the darker target colors, brighter regions to the brighter target colors\n" +
-      "- Preserve the exact luminance/brightness relationships between regions\n" +
-      "- Keep the EXACT same composition, subjects, structure, and level of detail\n" +
-      "- The result should look like a professional color grade with vivid, intentional colors\n" +
+      "- Colorize this grayscale image using the target palette above for backgrounds, clothing, objects, and environment.\n" +
+      "- For skin areas, follow the SKIN RENDERING RULE above strictly — preserve the luminance-driven shadow→highlight gradient of the original skin, never flatten to a single tone.\n" +
+      "- For hair areas, use the HAIR colour listed above while preserving the original brightness variation.\n" +
+      "- Map darker non-skin regions to the darker palette colours, brighter regions to the brighter palette colours.\n" +
+      "- Preserve the exact luminance/brightness relationships between regions.\n" +
+      "- Keep the EXACT same composition, subjects, structure, and level of detail.\n" +
+      "- The result should look like a professional color grade with vivid, intentional colors — and with natural, lifelike skin.\n" +
       "Return ONLY the recolored image.";
 
     var contents = [{
@@ -2377,7 +2490,8 @@
   }
 
   function setAiComparePosition(fraction) {
-    // fraction: 0 = all programmatic, 1 = all AI
+    // fraction: 0 = divider at left edge → AI fully visible
+    //           1 = divider at right edge → programmatic fully visible
     fraction = Math.max(0, Math.min(1, fraction));
     var pct = fraction * 100;
     var aiCanvas = $("#recolor-ai-canvas");
@@ -2396,6 +2510,9 @@
     var rightLabel = $(".ai-compare-label-right");
     if (leftLabel) leftLabel.style.display = pct < 8 ? "none" : "";
     if (rightLabel) rightLabel.style.display = pct > 92 ? "none" : "";
+
+    // Refresh download button — label + target depend on slider position
+    updateDownloadBtn();
   }
 
   (function () {

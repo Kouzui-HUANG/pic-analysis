@@ -31,8 +31,10 @@ Mode is stored as `currentMode` in main.js. `Strategy.route()` accepts mode as 4
 | Scene | `js/scene.js` | Stage 1.5 | Diagnosis → Scene[] with confidence scores + factors |
 | Strategy | `js/strategy.js` | Stage 2 | Diagnosis + Scene[] + params + mode → Adjustment[] |
 | Adjuster | `js/adjuster.js` | Stage 3 | ImageData + Adjustment[] → adjusted ImageData |
+| Recolor | `js/recolor.js` | Pipeline B | Palette extraction, 9 schemes, RGB-axis hue rotation, skinScore, variants |
+| Transfer | `js/transfer.js` | Pipeline C | Reference-image color matching: Reinhard LAB + Histogram LUT + Hue alignment (reuses Recolor.skinScore + extractPalette) |
 | Lang | `js/lang.js` | UI | i18n, EN + zh-Hant |
-| Main | `js/main.js` | UI/Orchestration | Pipeline coordination, DOM binding, presets, mode toggle, pipeline cache, character color detection, alt palettes, AI recolor |
+| Main | `js/main.js` | UI/Orchestration | Three-entry landing, pipeline coordination, DOM binding, presets, mode toggle, pipeline cache, character color detection, alt palettes, AI recolor, smart vibrance auto-tune, Transfer pipeline, AI compare slider, API Key modal |
 
 ---
 
@@ -237,9 +239,112 @@ Cache is invalidated (cleared) when a new image is uploaded or params change.
 
 ---
 
-## Collapsible Advanced Analysis (Recolor UI)
+## Collapsible Advanced Analysis (Recolor + Transfer UI)
 
-Scene detection, diagnosis panels, and auto-correction adjustments are wrapped in a collapsible section (`#recolor-analysis-collapsible`), defaulting to collapsed state. Toggle via `#recolor-analysis-toggle` button.
+Scene detection, diagnosis panels, and auto-correction adjustments are wrapped in collapsible sections (`#recolor-analysis-collapsible`, `#transfer-analysis-collapsible`), defaulting to collapsed state. Toggle via `#recolor-analysis-toggle` / `#transfer-analysis-toggle` buttons.
+
+---
+
+## Transfer Module — Reference Match (transfer.js)
+
+Third pipeline (Pipeline C). Takes a target image + a reference image and matches target to reference via three independent layers. Reuses `Recolor.skinScore` and `Recolor.extractPalette`.
+
+### Three-layer architecture
+
+| Layer | Algorithm | Channel | Strength slider |
+|-------|-----------|---------|-----------------|
+| 1 | Reinhard LAB statistical transfer — `(L − μ_src) × (σ_tgt / σ_src) + μ_tgt` | L / a / b | `lumStrength` (L), `colorStrength` (a,b) |
+| 2 | Histogram matching via 256-bin CDF → LUT | L | `histogramShape` |
+| 3 | RGB-axis hue rotation (same matrix as `Recolor.applyScheme`) with Gaussian-weighted hue-map (σ=0.10) | HSL hue | `hueStrength` |
+
+### Profile object (from `buildProfile`)
+
+```
+{
+  labStats: {
+    L: { mean, std },
+    a: { mean, std },
+    b: { mean, std }   // std floored at 0.5
+  },
+  lumCDF:       Float64Array(256),
+  palette:      Palette[],                       // from Recolor.extractPalette
+  dominantHues: [{ hue, weight }]               // palette.hsl[1] >= 0.10 only
+}
+```
+
+Sampling caps at 200,000 pixels for stats/CDF computation.
+
+### Hue map + pixel hue shift
+
+- `buildHueMap(srcDoms, tgtDoms)` → for each source dominant hue, find nearest target dominant hue, record signed shift + weight
+- `pixelHueShift(h, hueMap)` → Gaussian-weighted blend of all anchor shifts:
+  `shift(h) = Σ shift_i × w_i × exp(-d_i² / 2σ²) / Σ w_i × exp(-d_i² / 2σ²)`
+
+### Skin protection (dual-target)
+
+Skin pixels (scored by `Recolor.skinScore`) receive protection on **both** Layer 3 (hue shift scaled by `(1 - skinProtect × skinW)`) and Layer 1 (L*/a*/b* lerped back toward original by `skinProtect × skinW`). Rationale: statistical transfer can shift skin cast as much as hue rotation does.
+
+### Options (all 0–1, defaults shown)
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `overallStrength` | 1.0 | Final blend with original (1.0 = full transfer) |
+| `lumStrength` | 0.8 | Layer 1 L channel |
+| `colorStrength` | 0.8 | Layer 1 a/b channels |
+| `hueStrength` | 0.6 | Layer 3 hue alignment |
+| `histogramShape` | 0.3 | Layer 2 L-channel histogram matching |
+| `skinProtect` | 0.5 | Applied to both Layer 3 and Layer 1 |
+| `detailRetain` | 0.0 | Reduces final blend: `blendOut = overall × (1 - detailRetain)` |
+
+### Main.js orchestration (Transfer)
+
+- Entry: `runTransferPipeline()` (main.js)
+- State: `transferTargetImageData`, `transferRefImageData`, `transferRefProfile`, `transferRefDiagnosis`, `transferRefScenes`, `transferTargetDiagnosis`, `transferResultDiagnosis`, `transferResultData`, `transferAiResultData`
+- Debounce: `transferRerunTimer` on slider input
+- AI: `#transfer-ai-btn` → `aiRecolorImage(...)` result stored in `transferAiResultData`, draggable compare divider `#transfer-ai-compare-divider`
+
+### Public API
+
+```javascript
+PicAnalysis.Transfer.buildProfile(refImageData) → Profile
+PicAnalysis.Transfer.buildSourceStats(targetImageData) → SourceStats
+PicAnalysis.Transfer.match(targetImageData, profile, options) → ImageData
+```
+
+---
+
+## Smart Vibrance Auto-Tune (main.js + Recolor UI)
+
+Recolor workspace has a `-100 … +100` vibrance slider (`#recolor-vibrance-slider`). On new image upload, main.js calls `computeAutoVibrance(satMean, satStd, mode)`:
+
+```
+sign    = (mode === PHOTO) ? -1 : +1     // photo suppresses, illustration amplifies
+base    = (satMean - 0.30) × 150          // deviation from 0.30 target
+variety = (satStd  - 0.08) × 100          // multi-color bonus
+value   = clamp(sign × (base + variety), -50, +50)
+```
+
+Functions: `computeAutoVibrance(satMean, satStd, mode)`, `applyAutoVibrance(satMean, mode)`.
+User-override guard: `recolorVibranceUserSet` flag. Once user drags the slider, mode switches no longer auto-recompute vibrance (preserves user intent).
+
+---
+
+## API Key Modal (main.js)
+
+- Modal: `#api-key-modal` with password input, show/hide toggle (`#api-key-toggle`), save-to-file checkbox (`#api-key-save-check`), path picker (`#api-key-path-change`), load-from-file button (`#api-key-load-btn`)
+- Key storage: localStorage (`picanalysis_gemini_key`) + optional file export to user-chosen path (default: desktop)
+- Triggered by header button `#api-key-btn`, required before AI features (Recolor AI, Transfer AI) are enabled
+
+---
+
+## Three-Entry Landing Page
+
+`index.html` landing contains 3 `.drop-zone-card` elements side by side:
+- `#drop-zone-recolor` (data-mode="recolor") — 🎨 配色方案引擎
+- `#drop-zone-transfer` (data-mode="transfer") — 🪞 參考圖仿調色
+- `#drop-zone` (data-mode="tonelab") — 🔬 影像診斷與調色
+
+Each has its own `<input type="file">` (`#file-input-recolor`, `#file-input-transfer-target`, `#file-input`). Transfer additionally uses `#file-input-transfer-ref` for the reference image (loaded in-workspace).
 
 ---
 
@@ -263,3 +368,10 @@ Scene detection, diagnosis panels, and auto-correction adjustments are wrapped i
 16. **Landing page order** — Recolor card is left (first), ToneLab card is right (second).
 17. **Character colors** — skin detected locally via pixel analysis; hair detected by Gemini via `HAIR_COLOR_INDEX` in palette. Both sent to AI recolor prompt for exact preservation.
 18. **Recolor analysis is collapsible** — scenes, diagnosis, adjustments panels are in a `.collapsed` div by default in recolor workspace.
+19. **Three entry points, not two** — landing page has 3 cards: Recolor, Transfer, ToneLab. Each has its own file input, drop zone, and workspace `.hidden` toggle. Navigation state must be kept in sync (see `currentWorkspace` / workspace toggles in main.js).
+20. **Transfer reuses Recolor math** — do NOT duplicate `skinScore`, hue-rotation matrix, or palette extraction. transfer.js imports from `PicAnalysis.Recolor`. If you change `skinScore` thresholds or the rotation matrix, Transfer is affected too.
+21. **Transfer Profile is expensive, cache it** — `buildProfile` samples up to 200k pixels and runs K-means. Store result in `transferRefProfile` and only rebuild when the reference image changes. Slider changes trigger `Transfer.match()` only, not `buildProfile`.
+22. **Transfer skin protection is dual-layer** — applies to BOTH hue alignment (Layer 3) and LAB statistical transfer (Layer 1), because both can shift skin appearance. If you add new layers, decide explicitly whether skin protection applies.
+23. **Smart vibrance has a user-override guard** — `recolorVibranceUserSet` flag freezes auto-recompute after the user touches the slider. Mode switches rerun `computeAutoVibrance` only when the flag is false. If you add new auto-tuned controls, consider the same pattern.
+24. **API Key is required for AI** — AI buttons (`#ai-recolor-btn`, `#transfer-ai-btn`) must be gated by API key presence. Store key in localStorage (`picanalysis_gemini_key`); optional file export is best-effort (file system access API).
+25. **9 recolor schemes, but counter/variants exclude noRecolor behavior** — noRecolor is index 0 and applies only auto-correction; `generateVariants` returns null for noRecolor, warmShift, coolShift, hueRotate (see NO_VARIANTS set).

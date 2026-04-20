@@ -115,97 +115,187 @@ PicAnalysis.Recolor = (function () {
 
   function schemeMonochromatic(palette, overrideHue) {
     var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
-    return makeScheme(function () { return baseHue; });
+    // satMult 1.40: RGB-axis hue rotation collapses saturated pixels toward
+    // the gray axis (the larger the rotation, the more chroma loss). For
+    // mono-schemes, pixels whose source hue is far from baseHue undergo
+    // near-180° rotations and lose most of their chroma. 1.40 compensates
+    // that loss so post-rotation pixels still read as "this colour" rather
+    // than "grey with a faint tint". Higher values risk oversaturation on
+    // pixels already near baseHue (small rotation, minimal loss).
+    return makeScheme(function () { return baseHue; }, 1.40);
   }
 
   function schemeAnalogous(palette, overrideHue) {
     var dominantHue = findDominantHue(palette);
-    var baseHue = overrideHue != null ? overrideHue : dominantHue;
-    var spread = Math.max(findHueSpread(palette), 0.05);
-    var targetSpread = 1 / 6;
-    var ratio = targetSpread / Math.max(spread, targetSpread);
+    var spread = findHueSpread(palette);
+    // Target fan 45° (1/8). 60° still left too much freedom for common
+    // blue/warm-dominant inputs whose natural spread is ~90°-110°, producing
+    // visually timid compression. 45° guarantees a clearly "tight" palette.
+    var targetSpread = 1 / 8;
+    // When no override, shift baseHue slightly off the dominant so that
+    // already-narrow sources still exhibit a readable recolor. A fixed
+    // +20° anchor shift (faded by source spread so very wide sources aren't
+    // needlessly disturbed) turns analogous from a near-no-op into a
+    // consistent "tighten + lean" recolor on any input.
+    var anchorShift = 0;
+    if (overrideHue == null) {
+      var spreadFade = Math.max(0, 1 - spread / 0.35); // 1 at spread 0 → 0 at spread 0.35+
+      anchorShift = (20 / 360) * spreadFade;
+    }
+    var baseHue = overrideHue != null
+      ? overrideHue
+      : ((dominantHue + anchorShift) % 1 + 1) % 1;
+    // Normalize source spread onto target. Floor 0.3 allows meaningful
+    // compression on wide inputs; ceiling 3.5 prevents near-mono inputs from
+    // fanning out wildly.
+    var ratio = targetSpread / Math.max(spread, 0.04);
+    if (ratio < 0.3) ratio = 0.3;
+    if (ratio > 3.5) ratio = 3.5;
     return makeScheme(function (h) {
       // Measure distance from original dominant hue, then re-center around baseHue
       var d = hueDist(dominantHue, h);
-      var compressed = d * ratio;
-      return ((baseHue + compressed) % 1 + 1) % 1;
-    });
+      var remapped = d * ratio;
+      // Clamp remapped distance so expansion doesn't overshoot into the opposite side
+      if (remapped > targetSpread) remapped = targetSpread;
+      if (remapped < -targetSpread) remapped = -targetSpread;
+      return ((baseHue + remapped) % 1 + 1) % 1;
+    }, 1.15);
   }
 
   function schemeComplementary(palette, overrideHue, medianL) {
     var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
     var complement = (baseHue + 0.5) % 1;
-    var mid = Math.max(0.2, Math.min(0.8, medianL || 0.5));
+    // Clamp tightened vs original [0.2, 0.8]: a dark image previously got
+    // mid=0.2 which collapsed almost all pixels into one pole. [0.30, 0.70]
+    // keeps the split meaningful while ensuring medianL tracking.
+    // IMPORTANT: transition width must stay narrow because interpolating
+    // between two 180°-apart hues (base↔complement) passes through the
+    // ambiguous green/magenta midpoint at keep=0.5 — every pixel in the
+    // transition zone hits that artifact. halfBand 0.05 (was 0.08) shrinks
+    // the artifact population ~40% on mid-luminance-dense images while still
+    // giving enough width (0.10 total) for smooth AA at the boundary.
+    var mid = Math.max(0.30, Math.min(0.70, medianL || 0.5));
+    var halfBand = 0.05;
     return makeScheme(function (h, s, l) {
-      var keep = smoothstep((l - (mid - 0.15)) / 0.30);
+      var keep = smoothstep((l - (mid - halfBand)) / (halfBand * 2));
       return circularLerp(complement, baseHue, keep);
-    });
+    }, 1.18);
+  }
+
+  // Three-pole lum-split remap used by split-complementary and triadic.
+  // Previous formula used `smoothstep(l/mid)` for the dark half, which
+  // saturates (→1) so aggressively that pixels at 70-90% of mid were already
+  // 95%+ of the way back to baseHue — making pole2 effectively invisible for
+  // night scenes. The fix: use a symmetric narrow transition band centered on
+  // mid so dark pixels genuinely reach pole2 and bright pixels genuinely
+  // reach pole1, with only a small neighborhood of mid as the transition.
+  function makeThreePoleRemap(baseHue, pole1, pole2, mid, halfBand) {
+    return function (h, s, l) {
+      // Transition band: [mid - halfBand, mid + halfBand]
+      // Below band → full pole2 (dark pole)
+      // Above band → full pole1 (bright pole)
+      // In band → ramp through baseHue at l=mid
+      if (l <= mid - halfBand) return pole2;
+      if (l >= mid + halfBand) return pole1;
+      // Inside the band: split at the midpoint, lerp each half toward baseHue
+      if (l < mid) {
+        var blend = smoothstep((l - (mid - halfBand)) / halfBand);
+        return circularLerp(pole2, baseHue, blend);
+      }
+      var blend2 = smoothstep((l - mid) / halfBand);
+      return circularLerp(baseHue, pole1, blend2);
+    };
   }
 
   function schemeSplitComplementary(palette, overrideHue, medianL) {
     var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
     var pole1 = (baseHue + 150 / 360) % 1;
     var pole2 = (baseHue + 210 / 360) % 1;
-    var mid = Math.max(0.2, Math.min(0.8, medianL || 0.5));
-    return makeScheme(function (h, s, l) {
-      if (l < mid) {
-        var blend = smoothstep(l / mid);
-        return circularLerp(pole2, baseHue, blend);
-      }
-      var blend = smoothstep((l - mid) / (1 - mid));
-      return circularLerp(baseHue, pole1, blend);
-    });
+    // Clamp tightened so dark/bright images still have meaningful splits.
+    // halfBand 0.16 (up from 0.14): split-comp is the "soft multi-pole"
+    // scheme — wider band gives a gradient-rainbow feel across midtones.
+    // satMult 1.20: compensate for the two-pole 150°/210° rotation chroma loss
+    // (worse than triadic's 120° rotations).
+    var mid = Math.max(0.38, Math.min(0.62, medianL || 0.5));
+    return makeScheme(makeThreePoleRemap(baseHue, pole1, pole2, mid, 0.16), 1.20);
   }
 
   function schemeTriadic(palette, overrideHue, medianL) {
     var baseHue = overrideHue != null ? overrideHue : findDominantHue(palette);
     var pole1 = (baseHue + 1 / 3) % 1;
     var pole2 = (baseHue + 2 / 3) % 1;
-    var mid = Math.max(0.2, Math.min(0.8, medianL || 0.5));
-    return makeScheme(function (h, s, l) {
-      if (l < mid) {
-        var blend = smoothstep(l / mid);
-        return circularLerp(pole2, baseHue, blend);
-      }
-      var blend = smoothstep((l - mid) / (1 - mid));
-      return circularLerp(baseHue, pole1, blend);
-    });
+    // halfBand 0.09 (down from 0.14): triadic is the "crisp 3-way split"
+    // scheme — narrow band creates cleaner three-zone segmentation without
+    // muddy blends, differentiating it from split-complementary visually.
+    // satMult 1.22: 120° rotations keep more chroma than split-comp's
+    // 150°/210°, but narrow-band hard splits need extra vividness to read
+    // as "triadic".
+    var mid = Math.max(0.38, Math.min(0.62, medianL || 0.5));
+    return makeScheme(makeThreePoleRemap(baseHue, pole1, pole2, mid, 0.09), 1.22);
   }
 
   // Adaptive temperature shift: pixels far from target get pushed harder
   // to avoid landing in undesirable intermediate hue zones (e.g. green).
   // Near pixels get a gentle nudge; opposite-side pixels get nearly full pull.
-  function temperatureShift(h, s, target) {
+  //
+  // minShift: when the source hue is already near the target, temperatureShift
+  // would otherwise be a near no-op. We add a small forced rotation (scaled by
+  // saturation) so warmShift/coolShift always produce a visible lean even on
+  // already-warm / already-cool images.
+  function temperatureShift(h, s, target, minShift) {
     var dist = hueDist(h, target);          // signed distance toward target
     var absDist = Math.abs(dist);
     // Adaptive strength: close hues get gentle nudge, far hues get strong push
-    // Range 0.45→0.82 — high enough to clear intermediate zones (green),
-    // low enough to preserve hue variety in the result.
+    // Range 0.55→0.88 — higher floor than before so near-target pixels still
+    // shift, and the ceiling clears intermediate zones (green) when crossing
+    // 180° spans.
     var t = smoothstep(absDist / 0.42);
-    var strength = 0.45 + 0.37 * t;
+    var strength = 0.55 + 0.33 * t;
     // Only dampen near-achromatic pixels (s < ~0.20); chromatic pixels get full shift
     var satWeight = Math.min(1, smoothstep(s / 0.22));
-    return ((h + dist * strength * satWeight) % 1 + 1) % 1;
+    var shifted = h + dist * strength * satWeight;
+    // Floor: for already-near-target pixels (absDist small), dist*strength is tiny.
+    // Add a fixed perpendicular-style push (+minShift in the target direction)
+    // so warmShift on warm images and coolShift on cool images still visibly
+    // lean. Scaled by satWeight so greys stay grey.
+    if (minShift && absDist < 0.20) {
+      var floorFade = 1 - smoothstep(absDist / 0.20); // 1 at center, 0 at 0.20
+      // Direction: toward target when at target, otherwise sign of existing dist.
+      // When absDist≈0, use +minShift (forward on hue wheel).
+      var dir = dist >= 0 ? 1 : -1;
+      if (absDist < 0.01) dir = 1;
+      shifted += dir * minShift * floorFade * satWeight;
+    }
+    return ((shifted) % 1 + 1) % 1;
   }
 
   function schemeWarmShift(palette, overrideHue) {
     var warmTarget = 30 / 360;
+    // Floor 0.06 (~22°) keeps already-warm images visibly moving.
+    // satMult 1.30 compensates for RGB-axis rotation chroma loss.
     return makeScheme(function (h, s) {
-      return temperatureShift(h, s, warmTarget);
-    }, 1.08);
+      return temperatureShift(h, s, warmTarget, 0.06);
+    }, 1.30);
   }
 
   function schemeCoolShift(palette, overrideHue) {
     var coolTarget = 210 / 360;
+    // Negative minShift pushes toward cooler (lower hue values when already blue).
     return makeScheme(function (h, s) {
-      return temperatureShift(h, s, coolTarget);
-    }, 1.08);
+      return temperatureShift(h, s, coolTarget, -0.06);
+    }, 1.30);
   }
 
   function schemeHueRotate(palette, overrideHue) {
+    // 180° rotation passes pixels through the achromatic gray plane along the
+    // RGB (1,1,1) axis, causing severe chroma loss. satMult 1.35 (down from
+    // 1.45): previous value pushed already-saturated pixels into fluorescent
+    // territory (e.g. skin hues on a pink→green flip became neon-sickly).
+    // 1.35 still compensates most of the chroma loss without neon-ifying
+    // already-vivid sources.
     return makeScheme(function (h) {
       return (h + 0.5) % 1;
-    });
+    }, 1.35);
   }
 
   // Identity scheme: no hue remapping — just passes through auto-correction
