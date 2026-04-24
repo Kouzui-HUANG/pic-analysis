@@ -252,6 +252,27 @@ header h1 {
   gap: 3px;
 }
 
+.modal-provider-submodels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.modal-provider-submodels.hidden {
+  display: none;
+}
+
+.modal-provider-sublabel {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
 .modal-provider-btn {
   padding: 7px 10px;
   background: transparent;
@@ -265,6 +286,7 @@ header h1 {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .modal-provider-btn:hover {

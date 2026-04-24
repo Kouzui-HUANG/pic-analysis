@@ -1758,11 +1758,21 @@
   var IDB_NAME = "tonelab_apikey_db";
   var IDB_STORE = "handles";
   var IDB_KEY = "apiKeyFileHandle";
-  var PROVIDER_GEMINI = "gemini";
-  var PROVIDER_GMI = "gmi";
+  var PROVIDER_GEMINI = "gemini";        // Google Gemini API direct (Nano Banana)
+  var PROVIDER_GMI_GPT2 = "gmi";         // GMI Cloud — gpt-image-2
+  var PROVIDER_GMI_NB = "gmi_nb";        // GMI Cloud — gemini-3.1-flash-image-preview
+  // Both GMI providers share the same key slot (`apiKeys.gmi`), since it's
+  // the same GMI console credential — only the model + payload schema differ.
   var apiKeys = { gemini: "", gmi: "" };
-  var currentProvider = localStorage.getItem(API_KEY_PROVIDER_STORAGE) === PROVIDER_GMI
-    ? PROVIDER_GMI : PROVIDER_GEMINI;
+  function providerKeySlot(p) {
+    return (p === PROVIDER_GEMINI) ? "gemini" : "gmi";
+  }
+  var _storedProvider = localStorage.getItem(API_KEY_PROVIDER_STORAGE);
+  var currentProvider = (_storedProvider === PROVIDER_GEMINI
+                         || _storedProvider === PROVIDER_GMI_GPT2
+                         || _storedProvider === PROVIDER_GMI_NB)
+    ? _storedProvider
+    : PROVIDER_GMI_NB;  // Default on fresh install: GMI Nano Banana 2
   var savedFileHandle = null;
 
   // --- IndexedDB helpers for persisting FileSystemFileHandle ---
@@ -1821,12 +1831,18 @@
   var apiKeyLoadBtn = $("#api-key-load-btn");
   var apiKeyConfirm = $("#api-key-confirm");
   var apiKeyCancel = $("#api-key-cancel");
-  var apiKeyProviderGeminiBtn = $("#api-key-provider-gemini");
+  var apiKeyVendorGmiBtn = $("#api-key-vendor-gmi");
+  var apiKeyVendorGoogleBtn = $("#api-key-vendor-google");
   var apiKeyProviderGmiBtn = $("#api-key-provider-gmi");
+  var apiKeyProviderGmiNbBtn = $("#api-key-provider-gmi-nb");
+  var apiKeyModelRow = $("#api-key-model-row");
 
   // Provider currently selected in the modal UI (may differ from committed
   // currentProvider until the user clicks Confirm)
   var pendingProvider = currentProvider;
+  // Remembers the last chosen GMI sub-model so switching Google → GMI can
+  // restore it instead of defaulting.
+  var pendingGmiModel = (currentProvider === PROVIDER_GMI_GPT2) ? PROVIDER_GMI_GPT2 : PROVIDER_GMI_NB;
 
   function updateApiKeyBtnState() {
     var hasAny = !!(apiKeys.gemini || apiKeys.gmi);
@@ -1840,23 +1856,32 @@
   }
 
   function providerPlaceholder(provider) {
-    return provider === PROVIDER_GMI
-      ? t("apiKeyPlaceholderGmi")
-      : t("apiKeyPlaceholderGemini");
+    return provider === PROVIDER_GEMINI
+      ? t("apiKeyPlaceholderGemini")
+      : t("apiKeyPlaceholderGmi");
   }
 
   function refreshProviderToggleUI() {
-    apiKeyProviderGeminiBtn.classList.toggle("active", pendingProvider === PROVIDER_GEMINI);
-    apiKeyProviderGmiBtn.classList.toggle("active", pendingProvider === PROVIDER_GMI);
+    var isGmi = (pendingProvider !== PROVIDER_GEMINI);
+    // Top-level vendor buttons
+    apiKeyVendorGmiBtn.classList.toggle("active", isGmi);
+    apiKeyVendorGoogleBtn.classList.toggle("active", !isGmi);
+    // GMI sub-model row (only relevant when vendor=GMI)
+    apiKeyModelRow.classList.toggle("hidden", !isGmi);
+    apiKeyProviderGmiBtn.classList.toggle("active", pendingProvider === PROVIDER_GMI_GPT2);
+    apiKeyProviderGmiNbBtn.classList.toggle("active", pendingProvider === PROVIDER_GMI_NB);
     apiKeyInput.placeholder = providerPlaceholder(pendingProvider);
-    apiKeyInput.value = apiKeys[pendingProvider] || "";
+    apiKeyInput.value = apiKeys[providerKeySlot(pendingProvider)] || "";
   }
 
   function updateApiKeyModalText() {
     $("#api-key-modal-title").textContent = t("apiKeyModalTitle");
     $("#api-key-provider-label").textContent = t("apiKeyProviderLabel");
-    apiKeyProviderGeminiBtn.textContent = t("apiKeyProviderGemini");
+    $("#api-key-model-label").textContent = t("apiKeyModelLabel");
+    apiKeyVendorGmiBtn.textContent = t("apiKeyVendorGmi");
+    apiKeyVendorGoogleBtn.textContent = t("apiKeyVendorGoogle");
     apiKeyProviderGmiBtn.textContent = t("apiKeyProviderGmi");
+    apiKeyProviderGmiNbBtn.textContent = t("apiKeyProviderGmiNb");
     apiKeyInput.placeholder = providerPlaceholder(pendingProvider);
     $("#api-key-save-text").textContent = t("apiKeySaveLocal");
     $("#api-key-path-label").textContent = t("apiKeyPathLabel");
@@ -1889,18 +1914,28 @@
 
   function selectProvider(provider) {
     // Persist the key currently shown in the input to the previously selected
-    // provider before switching, so typing into one tab isn't lost when the
-    // user flips to the other.
-    apiKeys[pendingProvider] = (apiKeyInput.value || "").trim();
+    // provider's key slot before switching, so typing isn't lost when the
+    // user flips between tabs.
+    apiKeys[providerKeySlot(pendingProvider)] = (apiKeyInput.value || "").trim();
     pendingProvider = provider;
+    if (provider === PROVIDER_GMI_NB || provider === PROVIDER_GMI_GPT2) {
+      pendingGmiModel = provider;
+    }
     refreshProviderToggleUI();
   }
 
-  apiKeyProviderGeminiBtn.addEventListener("click", function () {
+  apiKeyVendorGmiBtn.addEventListener("click", function () {
+    // Switching to GMI restores whichever GMI sub-model was last picked
+    selectProvider(pendingGmiModel);
+  });
+  apiKeyVendorGoogleBtn.addEventListener("click", function () {
     selectProvider(PROVIDER_GEMINI);
   });
   apiKeyProviderGmiBtn.addEventListener("click", function () {
-    selectProvider(PROVIDER_GMI);
+    selectProvider(PROVIDER_GMI_GPT2);
+  });
+  apiKeyProviderGmiNbBtn.addEventListener("click", function () {
+    selectProvider(PROVIDER_GMI_NB);
   });
 
   apiKeyBtn.addEventListener("click", openApiKeyModal);
@@ -2034,7 +2069,7 @@
 
   apiKeyPathChange.addEventListener("click", function () {
     // Capture whatever is in the input into the current pending provider first
-    apiKeys[pendingProvider] = (apiKeyInput.value || "").trim();
+    apiKeys[providerKeySlot(pendingProvider)] = (apiKeyInput.value || "").trim();
     var hasAny = !!(apiKeys.gemini || apiKeys.gmi);
     if (hasAny) {
       saveKeyToFile(true).catch(function () {});
@@ -2056,8 +2091,8 @@
   });
 
   apiKeyConfirm.addEventListener("click", function () {
-    // Commit the current input to the pending provider's slot
-    apiKeys[pendingProvider] = (apiKeyInput.value || "").trim();
+    // Commit the current input to the pending provider's key slot
+    apiKeys[providerKeySlot(pendingProvider)] = (apiKeyInput.value || "").trim();
     currentProvider = pendingProvider;
     localStorage.setItem(API_KEY_PROVIDER_STORAGE, currentProvider);
 
@@ -2133,13 +2168,12 @@
   var GMI_API_BASE = "/gmi-proxy/api/v1/ie/requestqueue/apikey";
   var GMI_STORAGE_PROXY = "/storage-proxy/";
   var GMI_STORAGE_HOST = "https://storage.googleapis.com/";
-  var GMI_IMAGE_MODEL = "gpt-image-2";
   var GMI_POLL_INTERVAL_MS = 3000;
   var GMI_POLL_TIMEOUT_MS = 600000; // 10 min — real edits can be slow upstream
 
   function getApiKey(provider) {
     var p = provider || currentProvider;
-    return apiKeys[p] || "";
+    return apiKeys[providerKeySlot(p)] || "";
   }
 
   function canvasToBase64Jpeg(canvas) {
@@ -2189,9 +2223,10 @@
   // --- GMI Cloud gpt-image-2 client ---
 
   function gmiHeaders() {
+    // Both GMI providers share the same key slot; pass any GMI provider.
     return {
       "Content-Type": "application/json",
-      "Authorization": "Bearer " + getApiKey(PROVIDER_GMI)
+      "Authorization": "Bearer " + getApiKey(PROVIDER_GMI_NB)
     };
   }
 
@@ -2220,11 +2255,12 @@
     return err;
   }
 
-  function gmiSubmitRequest(payload) {
+  function gmiSubmitRequest(body) {
+    // body = { model: "...", payload: {...} } — full GMI queue request
     return fetch(GMI_API_BASE + "/requests", {
       method: "POST",
       headers: gmiHeaders(),
-      body: JSON.stringify({ model: GMI_IMAGE_MODEL, payload: payload })
+      body: JSON.stringify(body)
     }).then(function (res) {
       if (!res.ok) return gmiParseError(res);
       return res.json();
@@ -2356,8 +2392,9 @@
     });
   }
 
-  function callGmiImageApi(payload, onPoll) {
-    return gmiSubmitRequest(payload).then(function (submitResp) {
+  function callGmiImageApi(body, onPoll) {
+    // body = { model, payload }
+    return gmiSubmitRequest(body).then(function (submitResp) {
       var id = submitResp.request_id;
       if (!id) throw new Error("GMI response missing request_id");
       return gmiPollRequest(id, onPoll);
@@ -2620,13 +2657,17 @@
     });
   }
 
-  // --- GMI gpt-image-2 img-to-img recolor ---
+  // --- GMI img-to-img recolor (shared between gpt-image-2 and nano-banana 2) ---
   //
   // Flow: upload source image to GMI storage → submit request with the
   // resulting public_url as `payload.image` → poll → download result.
-  // Base64 in `payload.image` is silently dropped by the upstream, so the
-  // URL form is the only way to actually engage edit mode.
-  function aiRecolorImageGmi(srcCanvas, schemeName, scheme, charColors) {
+  // Each GMI image model has slightly different payload fields (gpt-image-2
+  // uses size/quality/output_format; gemini-3.1-flash-image-preview uses
+  // image/image_size/aspect_ratio/image_output_format) so the caller supplies
+  // a `buildPayload(publicUrl, prompt)` function that returns the model-
+  // specific body. The response shape is `outcome.media_urls[0].url` in both
+  // cases, so `callGmiImageApi` handles them identically.
+  function buildRecolorPromptForGmi(schemeName, scheme, charColors) {
     var schemeDesc = t("recolorTip." + scheme.key) || "";
     var paletteMapping = buildPaletteMappingText(scheme);
     var charColorText = formatCharacterColorsForPrompt(charColors);
@@ -2638,9 +2679,7 @@
         "Skin hue MUST stay within 5°–50° (warm peach/tan/brown). Never push skin toward yellow (>55°), green, blue, purple, or grey.\n" +
         "Apply the colour scheme ONLY to background, clothing, objects, and environment — NOT to skin or hair.\n\n";
     }
-
-    var prompt =
-      "RECOLOR TASK: Apply a \"" + schemeName + "\" color grading to the attached image.\n\n" +
+    return "RECOLOR TASK: Apply a \"" + schemeName + "\" color grading to the attached image.\n\n" +
       "SCHEME DESCRIPTION:\n" + schemeDesc + "\n\n" +
       "TARGET COLOR PALETTE (apply these colours to NON-skin / NON-hair regions):\n" +
       paletteMapping + "\n\n" +
@@ -2651,26 +2690,90 @@
       "- Preserve the EXACT composition, pose, clothing shapes, faces, and background structure of the input image.\n" +
       "- The result should look like a professional color grade with vivid, intentional colours.\n" +
       "Return ONLY the recoloured image.";
+  }
 
+  // Pick the supported option closest to the source canvas's aspect ratio.
+  // `supported` is a list of { label, ratio } pairs.
+  function pickClosestAspect(srcCanvas, supported) {
+    var srcAspect = srcCanvas.width / srcCanvas.height;
+    var best = supported[0];
+    var bestDiff = Math.abs(Math.log(srcAspect / best.ratio));
+    for (var i = 1; i < supported.length; i++) {
+      // Compare ratios in log space so 2:1 and 1:2 are symmetric.
+      var diff = Math.abs(Math.log(srcAspect / supported[i].ratio));
+      if (diff < bestDiff) { best = supported[i]; bestDiff = diff; }
+    }
+    return best.label;
+  }
+
+  // gpt-image-2 only supports three sizes (1:1 / 2:3 / 3:2).
+  var GMI_GPT2_SIZES = [
+    { label: "1024x1024", ratio: 1 },
+    { label: "1024x1536", ratio: 1024 / 1536 },   // 2:3, portrait
+    { label: "1536x1024", ratio: 1536 / 1024 }    // 3:2, landscape
+  ];
+
+  // nano-banana (gemini-3.1-flash-image-preview) supports ten aspect ratios.
+  var GMI_NB_ASPECTS = [
+    { label: "1:1",  ratio: 1 },
+    { label: "3:2",  ratio: 3 / 2 },
+    { label: "2:3",  ratio: 2 / 3 },
+    { label: "3:4",  ratio: 3 / 4 },
+    { label: "4:3",  ratio: 4 / 3 },
+    { label: "4:5",  ratio: 4 / 5 },
+    { label: "5:4",  ratio: 5 / 4 },
+    { label: "9:16", ratio: 9 / 16 },
+    { label: "16:9", ratio: 16 / 9 },
+    { label: "21:9", ratio: 21 / 9 }
+  ];
+
+  function runGmiImageEditFlow(srcCanvas, buildPayload) {
     processingText.textContent = t("aiRecolorUploading");
     return canvasToBlob(srcCanvas, "image/png")
       .then(function (blob) { return gmiUploadImage(blob, "png"); })
       .then(function (publicUrl) {
         processingText.textContent = t("aiRecolorSubmitting");
-        var payload = {
-          prompt: prompt,
-          image: publicUrl,
-          size: "1024x1024",
-          quality: "medium",
-          output_format: "png",
-          n: 1
-        };
-        return callGmiImageApi(payload, function (status) {
+        return callGmiImageApi(buildPayload(publicUrl), function (status) {
           if (status && (status.status === "processing" || status.status === "queued")) {
             processingText.textContent = t("aiRecolorPolling");
           }
         });
       });
+  }
+
+  function aiRecolorImageGmiGpt2(srcCanvas, schemeName, scheme, charColors) {
+    var prompt = buildRecolorPromptForGmi(schemeName, scheme, charColors);
+    var size = pickClosestAspect(srcCanvas, GMI_GPT2_SIZES);
+    return runGmiImageEditFlow(srcCanvas, function (publicUrl) {
+      return {
+        model: "gpt-image-2",
+        payload: {
+          prompt: prompt,
+          image: publicUrl,
+          size: size,
+          quality: "medium",
+          output_format: "png",
+          n: 1
+        }
+      };
+    });
+  }
+
+  function aiRecolorImageGmiNb(srcCanvas, schemeName, scheme, charColors) {
+    var prompt = buildRecolorPromptForGmi(schemeName, scheme, charColors);
+    var aspect = pickClosestAspect(srcCanvas, GMI_NB_ASPECTS);
+    return runGmiImageEditFlow(srcCanvas, function (publicUrl) {
+      return {
+        model: "gemini-3.1-flash-image-preview",
+        payload: {
+          prompt: prompt,
+          image: [publicUrl],     // nano-banana accepts an array of refs
+          image_size: "1K",
+          aspect_ratio: aspect,
+          image_output_format: "png"
+        }
+      };
+    });
   }
 
   function loadBase64Image(mimeType, base64Data) {
@@ -2713,9 +2816,18 @@
     var palette = scheme.originalPalette || [];
 
     var pipeline;
-    if (currentProvider === PROVIDER_GMI) {
-      // GMI img-to-img: upload source → submit with image URL → poll.
-      pipeline = aiRecolorImageGmi(origCanvas, schemeName, scheme, charColors)
+    if (currentProvider === PROVIDER_GMI_NB) {
+      // GMI Nano Banana 2 (gemini-3.1-flash-image-preview): recommended path,
+      // fast and reliable for img-to-img.
+      pipeline = aiRecolorImageGmiNb(origCanvas, schemeName, scheme, charColors)
+        .then(function (imageData) {
+          processingText.textContent = t("aiRecolorFetching");
+          return imageData;
+        });
+    } else if (currentProvider === PROVIDER_GMI_GPT2) {
+      // GMI gpt-image-2: upstream edit path is currently slow/unreliable but
+      // kept as an option for when it stabilises.
+      pipeline = aiRecolorImageGmiGpt2(origCanvas, schemeName, scheme, charColors)
         .then(function (imageData) {
           processingText.textContent = t("aiRecolorFetching");
           return imageData;
@@ -3326,11 +3438,12 @@
 
   transferAiBtn.addEventListener("click", function () {
     if (!transferTargetImageData || !transferRefImageData) return;
-    // Reference Match requires two input images, which GMI gpt-image-2 does
-    // not support. Force the Gemini key regardless of the modal selection.
+    // Reference Match requires two input images. Always use the direct
+    // Google Gemini key because the current Gemini call path is native
+    // multi-part; GMI providers would need separate wiring.
     var apiKey = getApiKey(PROVIDER_GEMINI);
     if (!apiKey) {
-      if (currentProvider === PROVIDER_GMI) {
+      if (currentProvider !== PROVIDER_GEMINI) {
         alert(t("aiRecolorTransferGmiUnsupported"));
       }
       openApiKeyModal();
