@@ -229,6 +229,55 @@ header h1 {
   gap: 14px;
 }
 
+.modal-provider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modal-provider-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.modal-provider-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  gap: 3px;
+}
+
+.modal-provider-btn {
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal-provider-btn:hover {
+  color: var(--text-primary);
+}
+
+.modal-provider-btn.active {
+  background: linear-gradient(135deg, var(--accent-soft), rgba(8, 145, 178, 0.14));
+  border-color: rgba(124, 58, 237, 0.35);
+  color: var(--active);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
 .modal-input-group {
   display: flex;
   align-items: center;

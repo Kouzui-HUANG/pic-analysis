@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ToneLab</title>
-  <link rel="stylesheet" href="css/style.css?v=17">
+  <link rel="stylesheet" href="css/style.css?v=18">
 </head>
 <body>
 
@@ -461,6 +461,13 @@
     <div class="modal-dialog">
       <h3 class="modal-title" id="api-key-modal-title">API Key 設定</h3>
       <div class="modal-body">
+        <div class="modal-provider-row">
+          <span class="modal-provider-label" id="api-key-provider-label">AI 服務商</span>
+          <div class="modal-provider-toggle" role="tablist">
+            <button id="api-key-provider-gemini" class="modal-provider-btn active" type="button" data-provider="gemini">Google Nano Banana</button>
+            <button id="api-key-provider-gmi" class="modal-provider-btn" type="button" data-provider="gmi">GMI gpt-image-2</button>
+          </div>
+        </div>
         <div class="modal-input-group">
           <input type="password" id="api-key-input" class="modal-input" placeholder="Gemini API Key" autocomplete="off" spellcheck="false">
           <button id="api-key-toggle" class="modal-input-toggle" type="button" title="Show/Hide">👁</button>
@@ -486,13 +493,13 @@
   <!-- Scripts: loaded in dependency order -->
   <script src="js/color.js?v=13"></script>
   <script src="js/stats.js?v=13"></script>
-  <script src="js/lang.js?v=18"></script>
+  <script src="js/lang.js?v=20"></script>
   <script src="js/analyzer.js?v=13"></script>
   <script src="js/scene.js?v=13"></script>
   <script src="js/strategy.js?v=13"></script>
   <script src="js/adjuster.js?v=13"></script>
   <script src="js/recolor.js?v=21"></script>
   <script src="js/transfer.js?v=1"></script>
-  <script src="js/main.js?v=22"></script>
+  <script src="js/main.js?v=29"></script>
 </body>
 </html>

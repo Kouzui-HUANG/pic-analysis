@@ -1754,10 +1754,15 @@
 
   var API_KEY_PATH_STORAGE = "tonelab_apikey_path";
   var API_KEY_SAVE_PREF = "tonelab_apikey_save_pref";
+  var API_KEY_PROVIDER_STORAGE = "tonelab_apikey_provider";
   var IDB_NAME = "tonelab_apikey_db";
   var IDB_STORE = "handles";
   var IDB_KEY = "apiKeyFileHandle";
-  var currentApiKey = "";
+  var PROVIDER_GEMINI = "gemini";
+  var PROVIDER_GMI = "gmi";
+  var apiKeys = { gemini: "", gmi: "" };
+  var currentProvider = localStorage.getItem(API_KEY_PROVIDER_STORAGE) === PROVIDER_GMI
+    ? PROVIDER_GMI : PROVIDER_GEMINI;
   var savedFileHandle = null;
 
   // --- IndexedDB helpers for persisting FileSystemFileHandle ---
@@ -1816,9 +1821,16 @@
   var apiKeyLoadBtn = $("#api-key-load-btn");
   var apiKeyConfirm = $("#api-key-confirm");
   var apiKeyCancel = $("#api-key-cancel");
+  var apiKeyProviderGeminiBtn = $("#api-key-provider-gemini");
+  var apiKeyProviderGmiBtn = $("#api-key-provider-gmi");
+
+  // Provider currently selected in the modal UI (may differ from committed
+  // currentProvider until the user clicks Confirm)
+  var pendingProvider = currentProvider;
 
   function updateApiKeyBtnState() {
-    if (currentApiKey) {
+    var hasAny = !!(apiKeys.gemini || apiKeys.gmi);
+    if (hasAny) {
       apiKeyBtn.textContent = t("apiKeyBtnSet");
       apiKeyBtn.classList.add("has-key");
     } else {
@@ -1827,9 +1839,25 @@
     }
   }
 
+  function providerPlaceholder(provider) {
+    return provider === PROVIDER_GMI
+      ? t("apiKeyPlaceholderGmi")
+      : t("apiKeyPlaceholderGemini");
+  }
+
+  function refreshProviderToggleUI() {
+    apiKeyProviderGeminiBtn.classList.toggle("active", pendingProvider === PROVIDER_GEMINI);
+    apiKeyProviderGmiBtn.classList.toggle("active", pendingProvider === PROVIDER_GMI);
+    apiKeyInput.placeholder = providerPlaceholder(pendingProvider);
+    apiKeyInput.value = apiKeys[pendingProvider] || "";
+  }
+
   function updateApiKeyModalText() {
     $("#api-key-modal-title").textContent = t("apiKeyModalTitle");
-    apiKeyInput.placeholder = t("apiKeyPlaceholder");
+    $("#api-key-provider-label").textContent = t("apiKeyProviderLabel");
+    apiKeyProviderGeminiBtn.textContent = t("apiKeyProviderGemini");
+    apiKeyProviderGmiBtn.textContent = t("apiKeyProviderGmi");
+    apiKeyInput.placeholder = providerPlaceholder(pendingProvider);
     $("#api-key-save-text").textContent = t("apiKeySaveLocal");
     $("#api-key-path-label").textContent = t("apiKeyPathLabel");
     apiKeyPathChange.textContent = t("apiKeyPathChange");
@@ -1843,7 +1871,8 @@
   }
 
   function openApiKeyModal() {
-    apiKeyInput.value = currentApiKey;
+    pendingProvider = currentProvider;
+    refreshProviderToggleUI();
     apiKeyInput.type = "password";
     var savePref = localStorage.getItem(API_KEY_SAVE_PREF) === "true";
     apiKeySaveCheck.checked = savePref;
@@ -1858,6 +1887,22 @@
     apiKeyModal.classList.add("hidden");
   }
 
+  function selectProvider(provider) {
+    // Persist the key currently shown in the input to the previously selected
+    // provider before switching, so typing into one tab isn't lost when the
+    // user flips to the other.
+    apiKeys[pendingProvider] = (apiKeyInput.value || "").trim();
+    pendingProvider = provider;
+    refreshProviderToggleUI();
+  }
+
+  apiKeyProviderGeminiBtn.addEventListener("click", function () {
+    selectProvider(PROVIDER_GEMINI);
+  });
+  apiKeyProviderGmiBtn.addEventListener("click", function () {
+    selectProvider(PROVIDER_GMI);
+  });
+
   apiKeyBtn.addEventListener("click", openApiKeyModal);
 
   apiKeyToggle.addEventListener("click", function () {
@@ -1869,17 +1914,37 @@
     apiKeyPathRow.classList.toggle("hidden", !apiKeySaveCheck.checked);
   });
 
+  // Serialise both provider keys; kept backwards-compatible with legacy
+  // `{ apiKey: "..." }` files by also writing `apiKey` to the Gemini slot
+  // when it exists (old ToneLab builds read this field).
+  function serializeKeys() {
+    var data = { gemini: apiKeys.gemini || "", gmi: apiKeys.gmi || "" };
+    if (apiKeys.gemini) data.apiKey = apiKeys.gemini;
+    return JSON.stringify(data);
+  }
+
+  function parseKeysFile(text) {
+    var data = JSON.parse(text);
+    var loaded = { gemini: "", gmi: "" };
+    if (typeof data.gemini === "string") loaded.gemini = data.gemini;
+    if (typeof data.gmi === "string") loaded.gmi = data.gmi;
+    // Legacy single-key format — treat as Gemini
+    if (!loaded.gemini && typeof data.apiKey === "string") loaded.gemini = data.apiKey;
+    return loaded;
+  }
+
   // Save key to a local file via File System Access API
-  function saveKeyToFile(key, pickNew) {
+  function saveKeyToFile(pickNew) {
     var opts = {
       types: [{ description: "API Key file", accept: { "application/json": [".json"] } }],
       suggestedName: "tonelab-apikey.json"
     };
+    var payload = serializeKeys();
     var handlePromise;
     if (pickNew || !savedFileHandle) {
       if (!window.showSaveFilePicker) {
         // Fallback: download as file
-        var blob = new Blob([JSON.stringify({ apiKey: key })], { type: "application/json" });
+        var blob = new Blob([payload], { type: "application/json" });
         var a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
         a.download = "tonelab-apikey.json";
@@ -1903,13 +1968,21 @@
       saveHandleToIDB(handle).catch(function () {});
       return handle.createWritable();
     }).then(function (writable) {
-      return writable.write(JSON.stringify({ apiKey: key })).then(function () {
+      return writable.write(payload).then(function () {
         return writable.close();
       });
     });
   }
 
   // Load key from a local file via File System Access API
+  function applyLoadedKeys(loaded) {
+    apiKeys.gemini = loaded.gemini || "";
+    apiKeys.gmi = loaded.gmi || "";
+    // Show whichever key matches the provider currently selected in the modal
+    refreshProviderToggleUI();
+    updateApiKeyBtnState();
+  }
+
   function loadKeyFromFile() {
     var opts = {
       types: [{ description: "API Key file", accept: { "application/json": [".json"] } }],
@@ -1925,12 +1998,9 @@
         var reader = new FileReader();
         reader.onload = function () {
           try {
-            var data = JSON.parse(reader.result);
-            if (data.apiKey) {
-              apiKeyInput.value = data.apiKey;
-              localStorage.setItem(API_KEY_PATH_STORAGE, input.files[0].name);
-              apiKeyPathValue.textContent = input.files[0].name;
-            }
+            applyLoadedKeys(parseKeysFile(reader.result));
+            localStorage.setItem(API_KEY_PATH_STORAGE, input.files[0].name);
+            apiKeyPathValue.textContent = input.files[0].name;
           } catch (e) {
             alert(t("apiKeyLoadError", { msg: e.message }));
           }
@@ -1952,10 +2022,7 @@
     }).then(function (file) {
       return file.text();
     }).then(function (text) {
-      var data = JSON.parse(text);
-      if (data.apiKey) {
-        apiKeyInput.value = data.apiKey;
-      }
+      applyLoadedKeys(parseKeysFile(text));
     }).catch(function (e) {
       if (e.name !== "AbortError") {
         alert(t("apiKeyLoadError", { msg: e.message }));
@@ -1966,8 +2033,11 @@
   apiKeyLoadBtn.addEventListener("click", loadKeyFromFile);
 
   apiKeyPathChange.addEventListener("click", function () {
-    if (currentApiKey) {
-      saveKeyToFile(currentApiKey, true).catch(function () {});
+    // Capture whatever is in the input into the current pending provider first
+    apiKeys[pendingProvider] = (apiKeyInput.value || "").trim();
+    var hasAny = !!(apiKeys.gemini || apiKeys.gmi);
+    if (hasAny) {
+      saveKeyToFile(true).catch(function () {});
     } else {
       // Just let user pick a location for future saves
       if (window.showSaveFilePicker) {
@@ -1986,9 +2056,14 @@
   });
 
   apiKeyConfirm.addEventListener("click", function () {
-    currentApiKey = (apiKeyInput.value || "").trim();
-    if (apiKeySaveCheck.checked && currentApiKey) {
-      saveKeyToFile(currentApiKey, false).catch(function (e) {
+    // Commit the current input to the pending provider's slot
+    apiKeys[pendingProvider] = (apiKeyInput.value || "").trim();
+    currentProvider = pendingProvider;
+    localStorage.setItem(API_KEY_PROVIDER_STORAGE, currentProvider);
+
+    var hasAny = !!(apiKeys.gemini || apiKeys.gmi);
+    if (apiKeySaveCheck.checked && hasAny) {
+      saveKeyToFile(false).catch(function (e) {
         if (e.name !== "AbortError") {
           alert(t("apiKeySaveError", { msg: e.message }));
         }
@@ -2038,11 +2113,10 @@
     }).then(function (text) {
       if (!text) return;
       try {
-        var data = JSON.parse(text);
-        if (data.apiKey) {
-          currentApiKey = data.apiKey;
-          updateApiKeyBtnState();
-        }
+        var loaded = parseKeysFile(text);
+        apiKeys.gemini = loaded.gemini || "";
+        apiKeys.gmi = loaded.gmi || "";
+        updateApiKeyBtnState();
       } catch (e) { /* ignore parse errors */ }
     }).catch(function () { /* silently fail — user can enter key manually */ });
   })();
@@ -2052,9 +2126,20 @@
   var GEMINI_PRO_MODEL = "gemini-3.1-pro-preview";
   var NANO_BANANA_MODEL = "gemini-3.1-flash-image-preview";
   var GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
+  // GMI's request-queue host (console.gmicloud.ai) does not emit CORS headers,
+  // so browser calls must go through the bundled same-origin proxy
+  // (see serve.py → /gmi-proxy/*). Same for storage.googleapis.com (signed
+  // upload/download URLs) via /storage-proxy/*.
+  var GMI_API_BASE = "/gmi-proxy/api/v1/ie/requestqueue/apikey";
+  var GMI_STORAGE_PROXY = "/storage-proxy/";
+  var GMI_STORAGE_HOST = "https://storage.googleapis.com/";
+  var GMI_IMAGE_MODEL = "gpt-image-2";
+  var GMI_POLL_INTERVAL_MS = 3000;
+  var GMI_POLL_TIMEOUT_MS = 600000; // 10 min — real edits can be slow upstream
 
-  function getApiKey() {
-    return currentApiKey;
+  function getApiKey(provider) {
+    var p = provider || currentProvider;
+    return apiKeys[p] || "";
   }
 
   function canvasToBase64Jpeg(canvas) {
@@ -2083,7 +2168,7 @@
   }
 
   function callGeminiApi(model, contents, config) {
-    var apiKey = getApiKey();
+    var apiKey = getApiKey(PROVIDER_GEMINI);
     var url = GEMINI_API_BASE + model + ":generateContent?key=" + encodeURIComponent(apiKey);
     var body = { contents: contents };
     if (config) body.generationConfig = config;
@@ -2098,6 +2183,191 @@
         });
       }
       return res.json();
+    });
+  }
+
+  // --- GMI Cloud gpt-image-2 client ---
+
+  function gmiHeaders() {
+    return {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + getApiKey(PROVIDER_GMI)
+    };
+  }
+
+  function gmiParseError(res) {
+    return res.text().then(function (txt) {
+      var msg = txt;
+      try {
+        var j = JSON.parse(txt);
+        msg = j.message || j.error || txt;
+      } catch (e) { /* plain-text error body */ }
+      throw new Error("GMI " + res.status + ": " + msg);
+    });
+  }
+
+  function gmiFriendlyError(err) {
+    // Distinguish "network couldn't reach the proxy" from upstream errors.
+    // The native fetch() rejects with TypeError("Failed to fetch") when the
+    // request never made it out — typically because serve.py isn't running,
+    // so /gmi-proxy/* goes nowhere.
+    if (err && err.name === "TypeError") {
+      return new Error(
+        "無法連到 GMI proxy。請在專案資料夾執行 `python3 serve.py` 後再試。\n" +
+        "(GMI API 不允許瀏覽器直接呼叫，必須走 serve.py 提供的 /gmi-proxy 代理)"
+      );
+    }
+    return err;
+  }
+
+  function gmiSubmitRequest(payload) {
+    return fetch(GMI_API_BASE + "/requests", {
+      method: "POST",
+      headers: gmiHeaders(),
+      body: JSON.stringify({ model: GMI_IMAGE_MODEL, payload: payload })
+    }).then(function (res) {
+      if (!res.ok) return gmiParseError(res);
+      return res.json();
+    }, function (err) { throw gmiFriendlyError(err); });
+  }
+
+  function gmiPollRequest(requestId, onPoll) {
+    var start = Date.now();
+    function tick() {
+      return fetch(GMI_API_BASE + "/requests/" + encodeURIComponent(requestId), {
+        headers: gmiHeaders()
+      }).then(function (res) {
+        if (!res.ok) return gmiParseError(res);
+        return res.json();
+      }, function (err) { throw gmiFriendlyError(err); }).then(function (data) {
+        if (onPoll) onPoll(data);
+        var status = (data.status || "").toLowerCase();
+        if (status === "success") return data;
+        if (status === "failed" || status === "error") {
+          // Error message lives under outcome.error.message in GMI failures,
+          // with assorted fallback locations depending on the backend.
+          var outcome = data.outcome || {};
+          var errObj = outcome.error || data.error || {};
+          var msg = (errObj && errObj.message)
+            || data.message
+            || (typeof errObj === "string" ? errObj : null)
+            || "GMI generation failed";
+          throw new Error(msg);
+        }
+        if (Date.now() - start > GMI_POLL_TIMEOUT_MS) {
+          throw new Error("GMI generation timed out");
+        }
+        return new Promise(function (resolve) {
+          setTimeout(function () { resolve(tick()); }, GMI_POLL_INTERVAL_MS);
+        });
+      });
+    }
+    return tick();
+  }
+
+  function gmiFetchImageAsBase64(url) {
+    // GMI returns a storage.googleapis.com URL. Browsers are blocked by
+    // CORS when fetching it directly, so route it through the local
+    // same-origin proxy (see serve.py → /storage-proxy/*).
+    var proxied = url;
+    var gsPrefix = "https://storage.googleapis.com/";
+    if (proxied.indexOf(gsPrefix) === 0) {
+      proxied = "/storage-proxy/" + proxied.slice(gsPrefix.length);
+    }
+    return fetch(proxied).then(function (res) {
+      if (!res.ok) throw new Error("Failed to fetch generated image (HTTP " + res.status + ")");
+      var mime = res.headers.get("content-type") || "image/png";
+      return res.blob().then(function (blob) {
+        return new Promise(function (resolve, reject) {
+          var reader = new FileReader();
+          reader.onload = function () {
+            var result = reader.result || "";
+            var comma = result.indexOf(",");
+            resolve({ mimeType: mime, data: comma >= 0 ? result.slice(comma + 1) : result });
+          };
+          reader.onerror = function () { reject(new Error("Failed to read generated image")); };
+          reader.readAsDataURL(blob);
+        });
+      });
+    });
+  }
+
+  // --- GMI image upload (required for img-to-img edit mode) ---
+  //
+  // GMI's image-edit path does NOT accept base64 in `payload.image` — the
+  // field only works when set to a URL. Uploading via:
+  //   1. POST /apikey/upload-url  { file_type: "png" }  →  { upload_url, public_url }
+  //   2. PUT <upload_url> (binary)
+  //   3. Use public_url as payload.image (rewritten to /storage-proxy/ on
+  //      the client so GMI's signed GCS URL reaches through the proxy).
+  function gmiGetUploadUrl(fileType) {
+    return fetch(GMI_API_BASE + "/upload-url", {
+      method: "POST",
+      headers: gmiHeaders(),
+      body: JSON.stringify({ file_type: fileType })
+    }).then(function (res) {
+      if (!res.ok) return gmiParseError(res);
+      return res.json();
+    }, function (err) { throw gmiFriendlyError(err); });
+  }
+
+  function proxyStorageUrl(url) {
+    if (url && url.indexOf(GMI_STORAGE_HOST) === 0) {
+      return GMI_STORAGE_PROXY + url.slice(GMI_STORAGE_HOST.length);
+    }
+    return url;
+  }
+
+  function gmiUploadImage(blob, fileType) {
+    return gmiGetUploadUrl(fileType).then(function (r) {
+      var proxied = proxyStorageUrl(r.upload_url);
+      return fetch(proxied, {
+        method: "PUT",
+        headers: { "Content-Type": blob.type || ("image/" + fileType) },
+        body: blob
+      }).then(function (putRes) {
+        if (!putRes.ok) {
+          return putRes.text().then(function (t) {
+            throw new Error("GMI upload PUT failed: " + putRes.status + " " + t.slice(0, 200));
+          });
+        }
+        return r.public_url;
+      }, function (err) { throw gmiFriendlyError(err); });
+    });
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise(function (resolve, reject) {
+      if (canvas.toBlob) {
+        canvas.toBlob(function (b) {
+          if (b) resolve(b); else reject(new Error("canvas toBlob failed"));
+        }, type, quality);
+      } else {
+        // Fallback: manually decode data URL
+        try {
+          var dataUrl = canvas.toDataURL(type, quality);
+          var byteString = atob(dataUrl.split(",")[1]);
+          var ab = new ArrayBuffer(byteString.length);
+          var ia = new Uint8Array(ab);
+          for (var i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+          resolve(new Blob([ab], { type: type }));
+        } catch (e) { reject(e); }
+      }
+    });
+  }
+
+  function callGmiImageApi(payload, onPoll) {
+    return gmiSubmitRequest(payload).then(function (submitResp) {
+      var id = submitResp.request_id;
+      if (!id) throw new Error("GMI response missing request_id");
+      return gmiPollRequest(id, onPoll);
+    }).then(function (finalData) {
+      var outcome = finalData.outcome || {};
+      var urls = outcome.media_urls || [];
+      if (!urls.length || !urls[0].url) {
+        throw new Error("GMI response missing media URL");
+      }
+      return gmiFetchImageAsBase64(urls[0].url);
     });
   }
 
@@ -2350,6 +2620,59 @@
     });
   }
 
+  // --- GMI gpt-image-2 img-to-img recolor ---
+  //
+  // Flow: upload source image to GMI storage → submit request with the
+  // resulting public_url as `payload.image` → poll → download result.
+  // Base64 in `payload.image` is silently dropped by the upstream, so the
+  // URL form is the only way to actually engage edit mode.
+  function aiRecolorImageGmi(srcCanvas, schemeName, scheme, charColors) {
+    var schemeDesc = t("recolorTip." + scheme.key) || "";
+    var paletteMapping = buildPaletteMappingText(scheme);
+    var charColorText = formatCharacterColorsForPrompt(charColors);
+    var charColorBlock = "";
+    if (charColorText) {
+      charColorBlock =
+        "CRITICAL — ORIGINAL CHARACTER COLORS (measured from the source image, MUST preserve):\n" +
+        charColorText + "\n" +
+        "Skin hue MUST stay within 5°–50° (warm peach/tan/brown). Never push skin toward yellow (>55°), green, blue, purple, or grey.\n" +
+        "Apply the colour scheme ONLY to background, clothing, objects, and environment — NOT to skin or hair.\n\n";
+    }
+
+    var prompt =
+      "RECOLOR TASK: Apply a \"" + schemeName + "\" color grading to the attached image.\n\n" +
+      "SCHEME DESCRIPTION:\n" + schemeDesc + "\n\n" +
+      "TARGET COLOR PALETTE (apply these colours to NON-skin / NON-hair regions):\n" +
+      paletteMapping + "\n\n" +
+      charColorBlock +
+      "INSTRUCTIONS:\n" +
+      "- Use the target palette for backgrounds, clothing, objects, and environment.\n" +
+      "- Keep the subject's hair colour listed above (if any) and the natural shadow→highlight variation on skin.\n" +
+      "- Preserve the EXACT composition, pose, clothing shapes, faces, and background structure of the input image.\n" +
+      "- The result should look like a professional color grade with vivid, intentional colours.\n" +
+      "Return ONLY the recoloured image.";
+
+    processingText.textContent = t("aiRecolorUploading");
+    return canvasToBlob(srcCanvas, "image/png")
+      .then(function (blob) { return gmiUploadImage(blob, "png"); })
+      .then(function (publicUrl) {
+        processingText.textContent = t("aiRecolorSubmitting");
+        var payload = {
+          prompt: prompt,
+          image: publicUrl,
+          size: "1024x1024",
+          quality: "medium",
+          output_format: "png",
+          n: 1
+        };
+        return callGmiImageApi(payload, function (status) {
+          if (status && (status.status === "processing" || status.status === "queued")) {
+            processingText.textContent = t("aiRecolorPolling");
+          }
+        });
+      });
+  }
+
   function loadBase64Image(mimeType, base64Data) {
     return new Promise(function (resolve, reject) {
       var img = new Image();
@@ -2389,23 +2712,29 @@
     var charColors = recolorCharColors || extractCharacterColors(origCanvas);
     var palette = scheme.originalPalette || [];
 
-    // Step 1: Analyze with Gemini 3.1 Pro (use COLOR original for accurate analysis)
-    // Also pass the 6-color palette so Gemini can pick the hair color
-    aiAnalyzeImage(base64Jpeg, palette)
-      .then(function (result) {
-        // Extract hair color from palette based on Gemini's selection
+    var pipeline;
+    if (currentProvider === PROVIDER_GMI) {
+      // GMI img-to-img: upload source → submit with image URL → poll.
+      pipeline = aiRecolorImageGmi(origCanvas, schemeName, scheme, charColors)
+        .then(function (imageData) {
+          processingText.textContent = t("aiRecolorFetching");
+          return imageData;
+        });
+    } else {
+      // Gemini (Nano Banana) two-stage flow
+      pipeline = aiAnalyzeImage(base64Jpeg, palette).then(function (result) {
         var hairIdx = result.hairColorIndex;
         if (hairIdx >= 0 && hairIdx < palette.length) {
           charColors.hair = palette[hairIdx].rgb.slice();
-          // Update UI with Gemini-detected hair color
           recolorCharColors = charColors;
           renderCharacterColors(charColors);
         }
-
         processingText.textContent = t("aiRecolorGenerating");
-        // Step 2: Recolor with Nano Banana 2 (use GRAYSCALE to avoid color interference)
         return aiRecolorImage(grayBase64, result.text, schemeName, scheme, charColors);
-      })
+      });
+    }
+
+    pipeline
       .then(function (imageData) {
         // Step 3: Load the returned image and display it
         return loadBase64Image(imageData.mimeType || imageData.mime_type || "image/png", imageData.data);
@@ -2997,8 +3326,16 @@
 
   transferAiBtn.addEventListener("click", function () {
     if (!transferTargetImageData || !transferRefImageData) return;
-    var apiKey = getApiKey();
-    if (!apiKey) { openApiKeyModal(); return; }
+    // Reference Match requires two input images, which GMI gpt-image-2 does
+    // not support. Force the Gemini key regardless of the modal selection.
+    var apiKey = getApiKey(PROVIDER_GEMINI);
+    if (!apiKey) {
+      if (currentProvider === PROVIDER_GMI) {
+        alert(t("aiRecolorTransferGmiUnsupported"));
+      }
+      openApiKeyModal();
+      return;
+    }
 
     transferAiBtn.classList.add("loading");
     transferAiBtn.textContent = "...";

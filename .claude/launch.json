@@ -4,7 +4,8 @@
     {
       "name": "pic-analysis",
       "runtimeExecutable": "/usr/local/bin/python3",
-      "runtimeArgs": ["-m", "http.server", "3000", "-d", "/Users/kouzuimac/Documents/claude_code/pic-analysis"],
+      "runtimeArgs": ["/Users/kouzuimac/Documents/claude_code/pic-analysis/serve.py", "3000"],
+      "cwd": "/Users/kouzuimac/Documents/claude_code/pic-analysis",
       "port": 3000
     }
   ]
