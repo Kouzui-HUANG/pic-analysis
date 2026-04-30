@@ -1767,12 +1767,30 @@
   function providerKeySlot(p) {
     return (p === PROVIDER_GEMINI) ? "gemini" : "gmi";
   }
+  // GMI needs a reverse-proxy (serve.py); static hosts like GitHub Pages can't
+  // provide one. Workaround: deploy apps-script/Code.gs as a Google Apps Script
+  // Web App and paste its /exec URL into GMI_RELAY_URL below (or set it once
+  // via the browser console: localStorage.setItem('gmi_relay_url', '<url>')).
+  var GMI_RELAY_URL = "https://script.google.com/macros/s/AKfycbxY6jI_1HB_3Oav4xaEtZgN5zYGxoi5QFdRRxjAbR_TO77JGxqhRp6zfD5p29hDjO1d/exec";
+  function getGmiRelayUrl() {
+    return localStorage.getItem("gmi_relay_url") || GMI_RELAY_URL || "";
+  }
+  var isStaticHost = location.protocol === "https:"
+    && !location.hostname.match(/^(localhost|127\.|0\.0\.0\.)/)
+    && !location.port;
+  function gmiUseRelay() {
+    return isStaticHost && !!getGmiRelayUrl();
+  }
+  function gmiAvailable() {
+    return !isStaticHost || gmiUseRelay();
+  }
   var _storedProvider = localStorage.getItem(API_KEY_PROVIDER_STORAGE);
+  var _defaultProvider = gmiAvailable() ? PROVIDER_GMI_NB : PROVIDER_GEMINI;
   var currentProvider = (_storedProvider === PROVIDER_GEMINI
                          || _storedProvider === PROVIDER_GMI_GPT2
                          || _storedProvider === PROVIDER_GMI_NB)
-    ? _storedProvider
-    : PROVIDER_GMI_NB;  // Default on fresh install: GMI Nano Banana 2
+    ? (gmiAvailable() || _storedProvider === PROVIDER_GEMINI ? _storedProvider : PROVIDER_GEMINI)
+    : _defaultProvider;
   var savedFileHandle = null;
 
   // --- IndexedDB helpers for persisting FileSystemFileHandle ---
@@ -1866,6 +1884,13 @@
     // Top-level vendor buttons
     apiKeyVendorGmiBtn.classList.toggle("active", isGmi);
     apiKeyVendorGoogleBtn.classList.toggle("active", !isGmi);
+    // On a static host (GitHub Pages etc), GMI is only usable when an
+    // Apps Script relay URL is configured.
+    var gmiBlocked = isStaticHost && !gmiUseRelay();
+    apiKeyVendorGmiBtn.disabled = gmiBlocked;
+    apiKeyVendorGmiBtn.title = gmiBlocked ? t("gmiStaticHostWarn") : "";
+    apiKeyVendorGmiBtn.style.opacity = gmiBlocked ? "0.4" : "";
+    apiKeyVendorGmiBtn.style.cursor = gmiBlocked ? "not-allowed" : "";
     // GMI sub-model row (only relevant when vendor=GMI)
     apiKeyModelRow.classList.toggle("hidden", !isGmi);
     apiKeyProviderGmiBtn.classList.toggle("active", pendingProvider === PROVIDER_GMI_GPT2);
@@ -2230,6 +2255,41 @@
     };
   }
 
+  // POST to the Apps Script relay using text/plain body (so the browser
+  // doesn't send a CORS preflight, which Apps Script web apps don't handle).
+  // Unwraps the relay's { _error, _status, _message } envelope into a real Error.
+  function gmiRelayCall(payload) {
+    return fetch(getGmiRelayUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=UTF-8" },
+      body: JSON.stringify(payload),
+      redirect: "follow"
+    }).then(function (res) {
+      if (!res.ok) throw new Error("Relay HTTP " + res.status);
+      return res.json();
+    }, function (err) {
+      throw new Error("Apps Script relay unreachable: " + (err && err.message || err));
+    }).then(function (data) {
+      if (data && data._error) {
+        throw new Error("GMI " + data._status + ": " + data._message);
+      }
+      return data;
+    });
+  }
+
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var result = reader.result || "";
+        var comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = function () { reject(new Error("Blob to base64 failed")); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
   function gmiParseError(res) {
     return res.text().then(function (txt) {
       var msg = txt;
@@ -2242,7 +2302,9 @@
   }
 
   function gmiFriendlyError(err) {
-    // Distinguish "network couldn't reach the proxy" from upstream errors.
+    if (isStaticHost) {
+      return new Error(t("gmiStaticHostWarn"));
+    }
     // The native fetch() rejects with TypeError("Failed to fetch") when the
     // request never made it out — typically because serve.py isn't running,
     // so /gmi-proxy/* goes nowhere.
@@ -2257,6 +2319,13 @@
 
   function gmiSubmitRequest(body) {
     // body = { model: "...", payload: {...} } — full GMI queue request
+    if (gmiUseRelay()) {
+      return gmiRelayCall({
+        action: "submit",
+        apiKey: getApiKey(PROVIDER_GMI_NB),
+        payload: body
+      });
+    }
     return fetch(GMI_API_BASE + "/requests", {
       method: "POST",
       headers: gmiHeaders(),
@@ -2270,12 +2339,19 @@
   function gmiPollRequest(requestId, onPoll) {
     var start = Date.now();
     function tick() {
-      return fetch(GMI_API_BASE + "/requests/" + encodeURIComponent(requestId), {
-        headers: gmiHeaders()
-      }).then(function (res) {
-        if (!res.ok) return gmiParseError(res);
-        return res.json();
-      }, function (err) { throw gmiFriendlyError(err); }).then(function (data) {
+      var fetchOnce = gmiUseRelay()
+        ? gmiRelayCall({
+            action: "poll",
+            apiKey: getApiKey(PROVIDER_GMI_NB),
+            requestId: requestId
+          })
+        : fetch(GMI_API_BASE + "/requests/" + encodeURIComponent(requestId), {
+            headers: gmiHeaders()
+          }).then(function (res) {
+            if (!res.ok) return gmiParseError(res);
+            return res.json();
+          }, function (err) { throw gmiFriendlyError(err); });
+      return fetchOnce.then(function (data) {
         if (onPoll) onPoll(data);
         var status = (data.status || "").toLowerCase();
         if (status === "success") return data;
@@ -2304,7 +2380,16 @@
   function gmiFetchImageAsBase64(url) {
     // GMI returns a storage.googleapis.com URL. Browsers are blocked by
     // CORS when fetching it directly, so route it through the local
-    // same-origin proxy (see serve.py → /storage-proxy/*).
+    // same-origin proxy (see serve.py → /storage-proxy/*) — or via the
+    // Apps Script relay when on a static host.
+    if (gmiUseRelay()) {
+      return gmiRelayCall({
+        action: "fetch_image",
+        url: url
+      }).then(function (data) {
+        return { mimeType: data.mimeType || "image/png", data: data.data };
+      });
+    }
     var proxied = url;
     var gsPrefix = "https://storage.googleapis.com/";
     if (proxied.indexOf(gsPrefix) === 0) {
@@ -2355,6 +2440,21 @@
   }
 
   function gmiUploadImage(blob, fileType) {
+    // On a static host, the upload-url + PUT pair both fail CORS. The Apps
+    // Script relay collapses both steps into a single `upload` action that
+    // ships the image bytes as base64 in its body and returns public_url.
+    if (gmiUseRelay()) {
+      return blobToBase64(blob).then(function (b64) {
+        return gmiRelayCall({
+          action: "upload",
+          apiKey: getApiKey(PROVIDER_GMI_NB),
+          fileType: fileType,
+          imageBase64: b64
+        });
+      }).then(function (data) {
+        return data.public_url;
+      });
+    }
     return gmiGetUploadUrl(fileType).then(function (r) {
       var proxied = proxyStorageUrl(r.upload_url);
       return fetch(proxied, {
